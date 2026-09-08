@@ -1,0 +1,69 @@
+export const WIDTH: number;
+export const HEIGHT: number;
+export interface Point {
+  x: number;
+  y: number;
+}
+export interface Agent extends Point {
+  id: string;
+  angle: number;
+  radius: number;
+}
+export interface Wall extends Point {
+  w: number;
+  h: number;
+}
+export interface World {
+  officers: Agent[];
+  targets: Agent[];
+  walls: Wall[];
+  time: number;
+}
+export interface Observation extends Point {
+  targetId: string;
+  observers: string[];
+}
+export type Contact = Observation & { kind: "direct" | "shared" };
+export interface VisionOptions {
+  range?: number;
+  fov?: number;
+}
+export interface StepOptions {
+  autoPatrol?: boolean;
+  selectedId?: string;
+  moveX?: number;
+  moveY?: number;
+  turn?: number;
+}
+export function createWorld(count?: number): World;
+export function stepWorld(
+  world: World,
+  dt: number,
+  options?: StepOptions,
+): World;
+export function observe(world: World, options?: VisionOptions): Observation[];
+export function visibleTo(
+  world: World,
+  officerId: string,
+  observations: Observation[],
+  sharing?: boolean,
+): Contact[];
+export function canSee(
+  observer: Point & { angle: number },
+  target: Point,
+  walls: Wall[],
+  range?: number,
+  fov?: number,
+): boolean;
+export function segmentBlocked(
+  start: Point,
+  end: Point,
+  walls: Wall[],
+): boolean;
+export function moveAgent(
+  agent: Agent,
+  dx: number,
+  dy: number,
+  walls: Wall[],
+  others?: Agent[],
+): { blockedX: boolean; blockedY: boolean };
