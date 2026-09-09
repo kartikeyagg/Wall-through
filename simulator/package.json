@@ -15,9 +15,11 @@
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next"
   },
   "dependencies": {
+    "@types/three": "^0.185.4",
     "next": "^16.3.4",
     "react": "^19.2.8",
-    "react-dom": "^19.2.8"
+    "react-dom": "^19.2.8",
+    "three": "^0.186.0"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.54.5",

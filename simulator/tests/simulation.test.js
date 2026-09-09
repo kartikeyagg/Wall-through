@@ -11,6 +11,13 @@ import {
   segmentBlocked,
   moveAgent,
 } from "../src/simulation.js";
+import {
+  createSimulatedDetectionProvider,
+  createSimulatedPoseProvider,
+  SensorFusion,
+  TrackStore,
+  tracksToObservations,
+} from "../src/sensors.js";
 
 test("world contains 5–10 officers and exactly three targets", () => {
   for (const [requested, expected] of [
@@ -311,4 +318,37 @@ test("one large timestep matches many fixed ticks without crossing the opaque wa
       ) > 0,
     );
   });
+});
+
+test("simulated sensor providers use the production-shaped 3D data contract", () => {
+  const world = createWorld(5);
+  const poses = createSimulatedPoseProvider(world).read(1234);
+  assert.equal(poses.length, 5);
+  assert.deepEqual(Object.keys(poses[0]).sort(), ["officerId", "orientation", "position", "timestamp"]);
+  assert.deepEqual(Object.keys(poses[0].position).sort(), ["x", "y", "z"]);
+  const detections = createSimulatedDetectionProvider(world).read(1234);
+  assert.ok(detections.length > 0);
+  const report = detections.find((item) => item.trackId === "T1");
+  assert.equal(report.timestamp, 1234);
+  assert.equal(report.officerId, "P1");
+  assert.equal(report.trackId, "T1");
+  assert.equal(report.position.z, world.targets[0].y);
+  assert.ok(report.confidence > 0 && report.confidence <= 1);
+  assert.deepEqual(Object.keys(report.velocity).sort(), ["x", "y", "z"]);
+});
+
+test("sensor fusion keeps a live, confidence-weighted track and expires stale location", () => {
+  const store = new TrackStore({ staleAfterMs: 50 });
+  const fused = new SensorFusion(store);
+  const reports = [
+    { trackId: "T9", officerId: "P1", timestamp: 100, confidence: 1, position: { x: 2, y: 1, z: 4 } },
+    { trackId: "T9", officerId: "P2", timestamp: 100, confidence: 0.5, position: { x: 5, y: 1, z: 4 } },
+  ];
+  const tracks = fused.update(reports, 100);
+  assert.equal(tracks.length, 1);
+  assert.equal(tracks[0].position.x, 3);
+  assert.deepEqual(tracks[0].observers, ["P1", "P2"]);
+  const observations = tracksToObservations(tracks, { range: 420, fov: 2 });
+  assert.equal(observations[0].targetId, "T9");
+  assert.deepEqual(store.ingest([], 151), []);
 });

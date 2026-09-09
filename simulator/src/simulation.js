@@ -1,6 +1,7 @@
-/** Deterministic, renderer-independent simulation. All distances are world pixels. */
-export const WIDTH = 1000;
-export const HEIGHT = 680;
+/** Deterministic, renderer-independent simulation. Ground plane distances are world units. */
+import { KinematicPhysicsAdapter, WORLD_DEPTH, WORLD_WIDTH, moveKinematic } from "./physics.js";
+export const WIDTH = WORLD_WIDTH;
+export const HEIGHT = WORLD_DEPTH;
 const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
 const angleDifference = (a, b) => Math.atan2(Math.sin(a - b), Math.cos(a - b));
 
@@ -28,13 +29,14 @@ export function createWorld(count = 7) {
       id: `P${i + 1}`,
       x,
       y,
+      z: y,
       angle,
       radius: 13,
     })),
     targets: [
-      { id: "T1", x: 380, y: 210, angle: 0.35, radius: 12 },
-      { id: "T2", x: 850, y: 160, angle: 1.2, radius: 12 },
-      { id: "T3", x: 400, y: 540, angle: -0.6, radius: 12 },
+      { id: "T1", x: 380, y: 210, z: 210, angle: 0.35, radius: 12 },
+      { id: "T2", x: 850, y: 160, z: 160, angle: 1.2, radius: 12 },
+      { id: "T3", x: 400, y: 540, z: 540, angle: -0.6, radius: 12 },
     ],
     walls: [
       { x: 100, y: 320, w: 800, h: 22 },
@@ -121,50 +123,16 @@ export function visibleTo(world, officerId, observations, sharing = true) {
   });
 }
 
-function fits(agent, x, y, walls, others) {
-  const radius = agent.radius;
-  if (x < radius || y < radius || x > WIDTH - radius || y > HEIGHT - radius)
-    return false;
-  for (const wall of walls) {
-    const nearX = clamp(x, wall.x, wall.x + wall.w);
-    const nearY = clamp(y, wall.y, wall.y + wall.h);
-    if (Math.hypot(x - nearX, y - nearY) < radius - 1e-8) return false;
-  }
-  return !others.some(
-    (other) =>
-      other !== agent &&
-      Math.hypot(x - other.x, y - other.y) < radius + other.radius - 1e-8,
-  );
-}
-
-/** Substeps prevent tunneling; independent axes let an agent slide along a wall. */
+/** @deprecated Use KinematicPhysicsAdapter; retained for compatible consumers. */
 export function moveAgent(agent, dx, dy, walls, others = []) {
-  if (![dx, dy].every(Number.isFinite))
-    return { blockedX: false, blockedY: false };
-  const steps = Math.max(
-    1,
-    Math.ceil(Math.hypot(dx, dy) / Math.max(1, agent.radius / 2)),
-  );
-  const sx = dx / steps;
-  const sy = dy / steps;
-  let blockedX = false;
-  let blockedY = false;
-  for (let i = 0; i < steps; i++) {
-    if (fits(agent, agent.x + sx, agent.y, walls, others)) agent.x += sx;
-    else if (sx) blockedX = true;
-    if (fits(agent, agent.x, agent.y + sy, walls, others)) agent.y += sy;
-    else if (sy) blockedY = true;
-  }
-  return { blockedX, blockedY };
+  return moveKinematic(agent, dx, dy, walls, others);
 }
 
-function patrol(agent, speed, dt, walls, others) {
-  const result = moveAgent(
+function patrol(agent, speed, dt, physics) {
+  const result = physics.moveKinematic(
     agent,
     Math.cos(agent.angle) * speed * dt,
     Math.sin(agent.angle) * speed * dt,
-    walls,
-    others,
   );
   if (result.blockedX) agent.angle = Math.PI - agent.angle;
   if (result.blockedY) agent.angle = -agent.angle;
@@ -188,6 +156,7 @@ export function stepWorld(
   const steps = Math.max(1, Math.ceil(dt / (1 / 60)));
   const tick = dt / steps;
   const others = [...world.officers, ...world.targets];
+  const physics = new KinematicPhysicsAdapter({ walls: world.walls, bodies: others });
   const selected = world.officers.find((officer) => officer.id === selectedId);
   moveX = Number.isFinite(moveX) ? moveX : 0;
   moveY = Number.isFinite(moveY) ? moveY : 0;
@@ -204,22 +173,21 @@ export function stepWorld(
       officer.angle = angleDifference(officer.angle + angularSpeed * tick, 0);
     }
     if (selected) {
-      moveAgent(
+      physics.moveKinematic(
         selected,
         (moveX / magnitude) * 130 * tick,
         (moveY / magnitude) * 130 * tick,
-        world.walls,
-        others,
       );
     }
     if (autoPatrol) {
       for (const officer of world.officers) {
         if (officer !== selected)
-          patrol(officer, 32, tick, world.walls, others);
+          patrol(officer, 32, tick, physics);
       }
     }
     for (const target of world.targets)
-      patrol(target, 44, tick, world.walls, others);
+      patrol(target, 44, tick, physics);
+    for (const agent of others) agent.z = agent.y;
     world.time += tick;
   }
   return world;

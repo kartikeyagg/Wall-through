@@ -5,6 +5,8 @@ export interface Point {
   y: number;
 }
 export interface Agent extends Point {
+  /** Ground-plane depth duplicated for consumers that use x/y/z coordinates. */
+  z?: number;
   id: string;
   angle: number;
   radius: number;
@@ -20,6 +22,9 @@ export interface World {
   time: number;
 }
 export interface Observation extends Point {
+  z?: number;
+  confidence?: number;
+  timestamp?: number;
   targetId: string;
   observers: string[];
 }
