@@ -30,6 +30,9 @@ export interface VisionOptions {
 }
 export interface StepOptions {
   autoPatrol?: boolean;
+  autoRotate?: boolean;
+  /** Automatic scan speed in radians per second, clamped to 0–Math.PI. */
+  rotationSpeed?: number;
   selectedId?: string;
   moveX?: number;
   moveY?: number;

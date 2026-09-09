@@ -110,9 +110,10 @@ export function observe(world, { range = 420, fov = Math.PI * 0.65 } = {}) {
 export function visibleTo(world, officerId, observations, sharing = true) {
   const officer = world.officers.find((item) => item.id === officerId);
   if (!officer) return [];
-  const { range = 420, fov = Math.PI * 0.65 } = observations.vision ?? {};
+  const { fov = Math.PI * 0.65 } = observations.vision ?? {};
   return observations.flatMap((observation) => {
-    if (!inView(officer, observation, range, fov)) return [];
+    // A live teammate measurement has no receiving camera distance limit.
+    if (!inView(officer, observation, Infinity, fov)) return [];
     const direct = observation.observers.includes(officerId);
     return direct || sharing
       ? [{ ...observation, kind: direct ? "direct" : "shared" }]
@@ -175,6 +176,8 @@ export function stepWorld(
   dt,
   {
     autoPatrol = false,
+    autoRotate = false,
+    rotationSpeed = Math.PI / 6,
     selectedId = "P2",
     moveX = 0,
     moveY = 0,
@@ -189,10 +192,18 @@ export function stepWorld(
   moveX = Number.isFinite(moveX) ? moveX : 0;
   moveY = Number.isFinite(moveY) ? moveY : 0;
   turn = Number.isFinite(turn) ? clamp(turn, -1, 1) : 0;
+  rotationSpeed = Number.isFinite(rotationSpeed)
+    ? clamp(rotationSpeed, 0, Math.PI)
+    : Math.PI / 6;
   const magnitude = Math.max(1, Math.hypot(moveX, moveY));
   for (let i = 0; i < steps; i++) {
+    for (const officer of world.officers) {
+      const angularSpeed = officer === selected && turn !== 0
+        ? turn * 2.2
+        : autoRotate ? rotationSpeed : 0;
+      officer.angle = angleDifference(officer.angle + angularSpeed * tick, 0);
+    }
     if (selected) {
-      selected.angle = angleDifference(selected.angle + turn * 2.2 * tick, 0);
       moveAgent(
         selected,
         (moveX / magnitude) * 130 * tick,

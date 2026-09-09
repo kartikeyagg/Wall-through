@@ -5,6 +5,16 @@
   --muted: #8c9ba5;
   --line: #2a353c;
 }
+.turn-controls, .rotation-controls { margin-top: 18px; }
+.turn-controls .section-heading { font-size: 11px; color: var(--muted); }
+.turn-controls output { color: var(--lime); font: 12px monospace; }
+.turn-buttons { display: flex; gap: 8px; margin: 10px 0; }
+.turn-buttons button { flex: 1; padding: 10px 6px; font-size: 11px; }
+.turn-controls small { color: var(--muted); font-size: 10px; }
+.rotation-toggle { width: 100%; font-size: 12px; }
+.rotation-toggle.scanning { color: var(--lime); border-color: #7b9d52; background: #2a3926; }
+.rotation-controls label { display: block; font-size: 11px; color: #b1bec7; }
+.rotation-controls .muted { line-height: 1.5; }
 * {
   box-sizing: border-box;
 }

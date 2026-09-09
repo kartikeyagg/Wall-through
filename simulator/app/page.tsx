@@ -20,6 +20,8 @@ type Settings = {
   cones: boolean;
   links: boolean;
   patrol: boolean;
+  autoRotate: boolean;
+  rotationSpeed: number;
   mode: "overview" | "glasses";
   range: number;
   fov: number;
@@ -32,6 +34,8 @@ const initial: Settings = {
   cones: true,
   links: true,
   patrol: false,
+  autoRotate: false,
+  rotationSpeed: 30,
   mode: "overview",
   range: 420,
   fov: 117,
@@ -203,7 +207,8 @@ export default function Home() {
     time: number;
     detections: number;
     contacts: Contact[];
-  }>({ time: 0, detections: 0, contacts: [] });
+    heading: number;
+  }>({ time: 0, detections: 0, contacts: [], heading: 270 });
   function change<K extends keyof Settings>(key: K, value: Settings[K]) {
     setSettings((s) => ({ ...s, [key]: value }));
   }
@@ -225,6 +230,8 @@ export default function Home() {
       if (!s.paused)
         stepWorld(w, dt * s.speed, {
           autoPatrol: s.patrol,
+          autoRotate: s.autoRotate,
+          rotationSpeed: (s.rotationSpeed * Math.PI) / 180,
           selectedId: s.selected,
           moveX: pressed("d", "arrowright") - pressed("a", "arrowleft"),
           moveY: pressed("s", "arrowdown") - pressed("w", "arrowup"),
@@ -238,7 +245,8 @@ export default function Home() {
       const ctx = canvas.current?.getContext("2d");
       if (ctx) draw(ctx, w, s, contacts);
       if (now - lastStats >= 100) {
-        setStats({ time: w.time, detections: observations.length, contacts });
+        const angle = w.officers.find((officer) => officer.id === s.selected)?.angle ?? 0;
+        setStats({ time: w.time, detections: observations.length, contacts, heading: ((angle * 180 / Math.PI) % 360 + 360) % 360 });
         lastStats = now;
       }
       frame = requestAnimationFrame(tick);
@@ -263,6 +271,12 @@ export default function Home() {
     keys.current.clear();
     live.current = { ...live.current, selected: "P2" };
     setSettings((s) => ({ ...s, selected: "P2" }));
+  }
+  function turnSelected(direction: number) {
+    const officer = world.current?.officers.find((o) => o.id === settings.selected);
+    if (!officer) return;
+    const angle = officer.angle + direction * Math.PI / 12;
+    officer.angle = Math.atan2(Math.sin(angle), Math.cos(angle));
   }
   const shared = stats.contacts.filter((c) => c.kind === "shared");
   return (
@@ -428,10 +442,21 @@ export default function Home() {
                 ),
               )}
             </div>
+            <div className="turn-controls">
+              <div className="section-heading">
+                <span>Head direction</span>
+                <output aria-label="Selected officer heading">{stats.heading.toFixed(0)}°</output>
+              </div>
+              <div className="turn-buttons">
+                <button onClick={() => turnSelected(-1)} aria-label="Turn selected officer left 15 degrees">↶ Turn left</button>
+                <button onClick={() => turnSelected(1)} aria-label="Turn selected officer right 15 degrees">Turn right ↷</button>
+              </div>
+              <small>15° per click · Q / E for continuous turning</small>
+            </div>
             <div className="sharing-row">
               <div>
                 <strong>Shared vision</strong>
-                <small>Receive teammate observations</small>
+                <small>No distance limit for received outlines</small>
               </div>
               <input
                 aria-label="Shared vision"
@@ -538,6 +563,29 @@ export default function Home() {
                 onChange={(e) => change("range", Number(e.target.value))}
               />
             </label>
+            <p className="muted">Camera range limits detection, not received outlines.</p>
+            <div className="rotation-controls">
+              <button
+                className={settings.autoRotate ? "rotation-toggle scanning" : "rotation-toggle"}
+                aria-pressed={settings.autoRotate}
+                onClick={() => change("autoRotate", !settings.autoRotate)}
+              >
+                {settings.autoRotate ? "Stop automatic rotation" : "Start automatic rotation"}
+              </button>
+              <p className="muted">All officers scan in place. Stop keeps their current direction.</p>
+              <label>
+                Rotation speed <output>{settings.rotationSpeed}°/s</output>
+                <input
+                  aria-label="Rotation speed"
+                  type="range"
+                  min="5"
+                  max="180"
+                  step="5"
+                  value={settings.rotationSpeed}
+                  onChange={(e) => change("rotationSpeed", Number(e.target.value))}
+                />
+              </label>
+            </div>
             <div className="toggles">
               {(
                 [
@@ -580,7 +628,7 @@ export default function Home() {
           <span className="step">03</span>
           <h3>Reveal</h3>
           <p>
-            Glasses project an outline through walls. Lose every observer, and
+            Glasses project an outline through walls at any distance when you look toward it. Lose every observer, and
             the outline disappears.
           </p>
         </div>

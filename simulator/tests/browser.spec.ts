@@ -96,6 +96,50 @@ test("live shared observations, view selection, settings, and keyboard controls"
   expect(errors).toEqual([]);
 });
 
+test("distant outlines and automatic rotation start, stop, and manual controls", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", error => errors.push(error.message));
+  await pausedScene(page);
+  await page.getByRole("slider", { name: "Police members" }).fill("5");
+  await page.getByRole("button", { name: "Officer glasses", exact: true }).click();
+  await page.getByRole("slider", { name: "Camera range" }).fill("220");
+  await expect(page.locator(".contacts")).toContainText("T1");
+  await expect(page.locator(".contacts")).toContainText("SHARED");
+  await page.getByRole("switch", { name: "Shared vision" }).uncheck();
+  await expect(page.locator(".contacts")).not.toContainText("T1");
+  await page.getByRole("switch", { name: "Shared vision" }).check();
+  await expect(page.locator(".contacts")).toContainText("T1");
+  const heading = page.getByLabel("Selected officer heading");
+  await expect(heading).toHaveText("270°");
+  await page.getByRole("button", { name: "Turn selected officer left 15 degrees" }).click();
+  await expect(heading).toHaveText("255°");
+  await page.getByRole("button", { name: "Turn selected officer right 15 degrees" }).click();
+  await expect(heading).toHaveText("270°");
+  for (let i = 0; i < 6; i++) await page.getByRole("button", { name: "Turn selected officer right 15 degrees" }).click();
+  await expect(page.locator(".contacts")).not.toContainText("T1");
+  await page.getByRole("button", { name: "Reset scene", exact: false }).click();
+  await expect(heading).toHaveText("270°");
+  await page.getByRole("slider", { name: "Rotation speed", exact: true }).fill("90");
+  await page.getByRole("button", { name: "Start automatic rotation", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Stop automatic rotation", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await page.waitForTimeout(200);
+  await expect(heading).toHaveText("270°"); // Paused scanning does not advance.
+  await page.getByRole("button", { name: "Resume", exact: false }).click();
+  await expect(heading).not.toHaveText("270°");
+  await page.getByRole("button", { name: "Stop automatic rotation", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Start automatic rotation", exact: true })).toHaveAttribute("aria-pressed", "false");
+  await page.waitForTimeout(200); // Let the 10 Hz heading display catch up.
+  const stoppedHeading = await heading.textContent();
+  const stoppedTime = await page.locator(".map-state time").textContent();
+  await expect(page.locator(".map-state time")).not.toHaveText(stoppedTime!);
+  await page.waitForTimeout(250);
+  await expect(heading).toHaveText(stoppedHeading!);
+  await page.getByRole("button", { name: "Pause", exact: false }).click();
+  await page.getByRole("button", { name: "Turn selected officer left 15 degrees" }).click();
+  await expect(heading).not.toHaveText(stoppedHeading!);
+  expect(errors).toEqual([]);
+});
+
 test("desktop and narrow layouts stay within the viewport", async ({
   page,
 }) => {

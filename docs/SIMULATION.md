@@ -6,7 +6,7 @@ The scene contains 5–10 police officers, exactly three moving simulated terror
 
 A direct observation requires the target to be within the observing officer's camera range and field of view, with an unobstructed line of sight. Walls block that line of sight. Turning an officer away or moving the target behind a wall can therefore end a detection.
 
-Direct observations are shared with teammates. If the selected officer cannot see a target directly but another officer currently can, shared vision can display an outline at the target's simulated position, including through an opaque wall. The target must also be within the receiving officer's viewing direction, field of view, and configured range. Multiple officers may observe the same target. Losing one observer does not remove the outline if another still sees it.
+Direct observations are shared with teammates. If the selected officer cannot see a target directly but another officer currently can, shared vision can display an outline at the target's simulated position, including through an opaque wall. The receiving officer must look toward the target within their field of view, but their distance to it does not matter. Camera range still limits the source officer's direct detection. Multiple officers may observe the same target. Losing one observer does not remove the outline if another still sees it.
 
 If all observers lose sight of a target, its shared outline disappears. There is no last-known-position trail or prediction that continues to reveal an unseen target. Disabling shared vision removes teammate-derived outlines without changing direct vision.
 
@@ -25,6 +25,9 @@ Vision cones illustrate camera orientation and coverage; communication links hel
 | Click an officer        | Select whose movement and glasses view to inspect                        |
 | WASD or arrow keys      | Move the selected officer after focusing the canvas                      |
 | Q / E                   | Turn the selected officer's head direction                               |
+| Turn left / Turn right  | Adjust the selected officer's heading by 15° per click, even while paused |
+| Start / Stop automatic rotation | Toggle scanning for all officers; stopping preserves their headings |
+| Rotation speed          | Set automatic scanning to 5–180° per simulation second (default 30°/s) |
 | Space                   | Pause or resume while the canvas has keyboard focus                      |
 | Pause / resume          | Freeze or continue simulation movement                                   |
 | Reset scene             | Restart positions and elapsed time, select P2, and retain other settings |
@@ -38,7 +41,9 @@ Vision cones illustrate camera orientation and coverage; communication links hel
 
 Keyboard movement is intended for the simulation canvas. Click it again after interacting with a slider or another control.
 
-The selected officer stays under manual control even when automatic police patrol is enabled. All three targets patrol whenever the simulation is running. Pausing freezes movement; changing viewing settings or selecting another officer still updates the displayed observations.
+The selected officer's movement stays under manual control even when automatic police patrol is enabled. Automatic rotation is separate from patrol and rotates every officer, including the selected one; with patrol disabled, officers scan while standing still. Holding Q/E overrides scanning for the selected officer until released. The turn buttons add a 15° adjustment; scanning continues if enabled. The heading readout uses screen coordinates: 0° right, 90° down, 180° left, and 270° up.
+
+**Stop automatic rotation** stops scanning without resetting headings or pausing the simulation. Other motion continues: automatic patrol can still turn officers when they collide with an obstacle. Disable patrol as well to keep non-selected officers facing a fixed direction. All three targets patrol whenever the simulation is running. Pausing freezes motion and scanning; manual turn buttons, viewing settings, and officer selection still update observations. Reset retains the rotation toggle and speed along with other settings. Simulation speed scales scanning as well as movement.
 
 ## Suggested checks
 
@@ -47,6 +52,8 @@ The selected officer stays under manual control even when automatic police patro
 3. Disable shared vision. The outline should disappear while directly visible targets remain visible.
 4. Re-enable sharing, then turn or move observers until none can see the target. Its shared outline should disappear.
 5. Change the officer count and reset. The scene should still contain exactly three targets.
+6. With 5 officers, pause/reset and set camera range to 220. P1 is 200 units from T1; P2 is 240 units away behind the wall. P2 still receives T1 despite being beyond camera range. At a range of 100, P1 also loses detection, and T1 disappears.
+7. Restore default camera settings, start automatic rotation, and resume. Headings and camera cones rotate, acquiring and losing targets as they scan. Stop rotation and check that headings hold while simulation time continues. Manual turn buttons remain available.
 
 ## Modeling limits
 
