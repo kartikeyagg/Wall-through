@@ -4,7 +4,17 @@
 
 Wall Through is a browser-based 3D scene with 5–10 police officers, three moving simulated terrorists, opaque 3D walls, and a ground plane. Walls are static colliders; officers and targets are kinematic capsule bodies. Fixed simulation substeps prevent tunnelling and permit sliding along a wall.
 
-The world overview is an inspectable third-person 3D scene. Officer glasses is a first-person 3D camera at the selected officer’s head. In glasses view, only direct contacts, live teammate-shared outlines, and the translucent skeleton overlays teammates publish are rendered.
+The world overview is an inspectable third-person 3D scene. Officer glasses is a first-person 3D camera placed exactly where the selected officer’s stereo rig is: at eye height (the rig's 1.7 m `mountHeight`), looking level along the heading, with the rig's horizontal field of view. What you see in glasses view is the camera's view. In glasses view, only direct contacts, live teammate-shared outlines, and the translucent skeleton overlays teammates publish are rendered.
+
+### The stereo rig is the only sensor
+
+Each officer carries one sensor: the head-mounted stereo camera. Its two glass lenses sit directly over the officer's eyes, so the camera's optical axis and the officer's line of sight are the same. The old line-of-sight `simulated-camera` detection provider has been removed.
+
+### Where each officer is looking
+
+- **Eyes** — every officer has a head with two eyes (white with dark pupils) that turn with the officer's heading.
+- **Gaze ray** — a line runs from the eyes along the line of sight and stops at the first wall it hits, or at the camera range. The dot at its end is the point the officer is looking at. The selected officer's ray is lime; the others are blue.
+- **Stereo cones** — with **Vision cones** on, each officer's left and right lens cones start at their eyes and point the way they face. In glasses view only the selected officer's cones are drawn, and that officer's own body is hidden so it does not block the camera.
 
 ## Controls
 
