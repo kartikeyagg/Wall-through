@@ -16,6 +16,17 @@ Each officer carries one sensor: the head-mounted stereo camera. Its two glass l
 - **Gaze ray** — a line runs from the eyes along the line of sight and stops at the first wall it hits, or at the camera range. The dot at its end is the point the officer is looking at. The selected officer's ray is lime; the others are blue.
 - **Stereo cones** — with **Vision cones** on, each officer's left and right lens cones start at their eyes and point the way they face. In glasses view only the selected officer's cones are drawn, and that officer's own body is hidden so it does not block the camera.
 
+### Direction arrows to every known target
+
+In **Officer glasses**, each live track the officer knows about gets an arrow on a ring around the centre of the view, like a game threat indicator. Up means straight ahead, the sides mean left or right, and down means behind their back. Targets outside the camera's field of view still get an arrow.
+
+- **Colour** — yellow for the officer's own detection, lime for a track shared by a teammate.
+- **Size** — closer targets get larger arrows.
+- **Pulse** — the arrow dims and pulses while the track is coasting (no fresh measurement).
+- **Layer** — arrows are drawn on the same always-on-top layer as the skeletons behind walls, so walls never hide them.
+
+Arrows only appear for real tracks: the officer's own, plus teammates' when **Shared vision** is on. Turn them off with the **Direction arrows** toggle. The list comes from `awareOf` in `simulator/src/simulation.js`. It works like `visibleTo`, but without the field-of-view filter.
+
 ## Controls
 
 | Control | Purpose |
@@ -35,6 +46,7 @@ Each officer carries one sensor: the head-mounted stereo camera. Its two glass l
 | Field of view / range | Adjust the stereo rig's horizontal FOV and operator range cutoff |
 | Stereo baseline | Set the lens separation on the head rig, 2–30 cm |
 | Movement trails / Velocity vectors | Show each track's recent path and heading arrow |
+| Direction arrows | In glasses view, point an arrow toward every known target, including those behind the officer |
 | Skeleton overlay | Draw 18-joint body poses for resolved subjects |
 | Overlay opacity | Ceiling alpha for teammate-published skeletons, 0–100% |
 
