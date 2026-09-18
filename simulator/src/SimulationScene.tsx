@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { BONES, skeletonSegments } from "./skeleton.js";
+import { createStereoRig } from "./stereo.js";
 import type { Skeleton } from "./skeleton.js";
 import type { OverlayLayer } from "./overlay.js";
 import type { World } from "./simulation.js";
@@ -38,28 +39,48 @@ type Props = {
 
 const scale = 0.02;
 const UNITS_PER_METRE = 24;
-const rigMountHeight = 1.55;
+// The rig sits on the officer's eyes, so its optical centre and the eye line share one height.
+const defaultRig = createStereoRig(), eyeHeight = defaultRig.mountHeight * UNITS_PER_METRE * scale, defaultBaseline = defaultRig.baseline;
+const headRadius = 0.11;
+const eyeSpacing = 0.1; // drawn wider than life so the gaze reads from the overview camera
 const skeletonMinScore = 0.32;
 const overlayTintColor = new THREE.Color("#bcf574");
 const point = (x: number, y: number, height = 0) => new THREE.Vector3((x - 500) * scale, height, (y - 340) * scale);
 
-type StereoRigVisual = { group: THREE.Group; lenses: [THREE.Mesh, THREE.Mesh]; mountHeight: number };
-type FieldVisual = { group: THREE.Group; coverage: THREE.Mesh; left: THREE.Mesh; right: THREE.Mesh; overlap: THREE.Line };
+type StereoRigVisual = { group: THREE.Group; lenses: [THREE.Mesh, THREE.Mesh] };
+type OfficerVisual = { body: THREE.Mesh; head: THREE.Group; rig: StereoRigVisual; gaze: THREE.Line; gazePosition: THREE.BufferAttribute; gazeMaterial: THREE.LineBasicMaterial; gazePoint: THREE.Mesh };
+type FieldVisual = { group: THREE.Group; left: THREE.Mesh; right: THREE.Mesh; overlap: THREE.Line };
 type ContactVisual = { arrow: THREE.LineSegments; arrowMaterial: THREE.LineBasicMaterial; trail: THREE.Line; trailPosition: THREE.BufferAttribute; trailColor: THREE.BufferAttribute; ring: THREE.LineLoop; ringMaterial: THREE.LineBasicMaterial; outline: THREE.LineSegments; outlineMaterial: THREE.LineBasicMaterial };
 type LinkVisual = { line: THREE.Line; position: THREE.BufferAttribute; distance: THREE.BufferAttribute };
 type SkeletonVisual = { bones: THREE.LineSegments; bonesMaterial: THREE.LineBasicMaterial; bonesPosition: THREE.BufferAttribute; bonesColor: THREE.BufferAttribute; joints: THREE.Points; jointsMaterial: THREE.PointsMaterial; jointsPosition: THREE.BufferAttribute; jointsColor: THREE.BufferAttribute; tint: number; color: THREE.Color };
 
+/** Glass lenses sit directly over the eyes: the camera sees exactly what the officer sees. */
 function makeStereoRig(): StereoRigVisual {
   const group = new THREE.Group();
-  const housing = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.09, 0.12), new THREE.MeshStandardMaterial({ color: "#101a20", roughness: 0.45, metalness: 0.35 }));
-  housing.position.set(0, 0.84, 0.08);
-  const makeLens = () => { const lens = new THREE.Mesh(new THREE.CylinderGeometry(0.052, 0.052, 0.045, 12), new THREE.MeshStandardMaterial({ color: "#35434d", roughness: 0.22, metalness: 0.7 })); lens.rotation.x = Math.PI / 2; lens.position.set(0, 0.84, 0.16); return lens; };
+  const band = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.022, 0.02), new THREE.MeshStandardMaterial({ color: "#101a20", roughness: 0.45, metalness: 0.35 }));
+  band.position.set(0, eyeHeight + 0.058, headRadius * 0.8);
+  const makeLens = () => { const lens = new THREE.Mesh(new THREE.CylinderGeometry(0.034, 0.034, 0.008, 16), new THREE.MeshStandardMaterial({ color: "#9fd8ff", roughness: 0.05, metalness: 0.2, transparent: true, opacity: 0.18, depthWrite: false })); lens.rotation.x = Math.PI / 2; lens.position.set(0, eyeHeight, headRadius + 0.03); return lens; };
   const lenses: [THREE.Mesh, THREE.Mesh] = [makeLens(), makeLens()];
-  group.add(housing, ...lenses);
-  return { group, lenses, mountHeight: rigMountHeight };
+  group.add(band, ...lenses);
+  return { group, lenses };
 }
 
-function makePerson(color: string, stereo = false) {
+function makeHead(skin: string) {
+  const head = new THREE.Group();
+  const skull = new THREE.Mesh(new THREE.SphereGeometry(headRadius, 16, 12), new THREE.MeshStandardMaterial({ color: skin, roughness: 0.7 }));
+  skull.position.y = eyeHeight;
+  head.add(skull);
+  for (const side of [-1, 1]) {
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.032, 14, 10), new THREE.MeshBasicMaterial({ color: "#ffffff" }));
+    eye.position.set(side * eyeSpacing / 2, eyeHeight, headRadius * 0.82);
+    const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.017, 12, 8), new THREE.MeshBasicMaterial({ color: "#05090c" }));
+    pupil.position.set(side * eyeSpacing / 2, eyeHeight, headRadius * 0.82 + 0.02);
+    head.add(eye, pupil);
+  }
+  return head;
+}
+
+function makePerson(color: string) {
   const group = new THREE.Group();
   const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.16, 0.42, 5, 10), new THREE.MeshStandardMaterial({ color, roughness: 0.55, transparent: true }));
   body.position.y = 0.38;
@@ -68,8 +89,34 @@ function makePerson(color: string, stereo = false) {
   heading.rotation.x = Math.PI / 2;
   heading.position.set(0, 0.38, 0.32);
   group.add(heading);
-  if (stereo) { const rig = makeStereoRig(); rig.group.userData.rig = rig; group.add(rig.group); }
   return group;
+}
+
+function makeOfficer(color: string) {
+  const group = makePerson(color), head = makeHead("#c99a78"), rig = makeStereoRig();
+  head.add(rig.group); group.add(head);
+  // Gaze ray: the shared optical axis of eyes and rig, cut short at the first wall it meets.
+  const gazeGeometry = new THREE.BufferGeometry(), gazePosition = new THREE.BufferAttribute(new Float32Array(6), 3); gazeGeometry.setAttribute("position", gazePosition);
+  const gazeMaterial = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.85 }), gaze = new THREE.Line(gazeGeometry, gazeMaterial);
+  const gazePoint = new THREE.Mesh(new THREE.SphereGeometry(0.035, 12, 8), new THREE.MeshBasicMaterial({ color }));
+  const visual: OfficerVisual = { body: group.children[0] as THREE.Mesh, head, rig, gaze, gazePosition, gazeMaterial, gazePoint };
+  group.userData.officer = visual;
+  return { group, visual };
+}
+
+/** Distance along a map-space ray to the first wall face, or `limit` if nothing is hit. */
+function rayToWalls(x: number, y: number, dx: number, dy: number, walls: World["walls"], limit: number) {
+  let nearest = limit;
+  for (const wall of walls) {
+    let low = 0, high = nearest, blocked = true;
+    for (const [origin, direction, min, max] of [[x, dx, wall.x, wall.x + wall.w], [y, dy, wall.y, wall.y + wall.h]]) {
+      if (Math.abs(direction) < 1e-9) { if (origin < min || origin > max) { blocked = false; break; } continue; }
+      const a = (min - origin) / direction, b = (max - origin) / direction; low = Math.max(low, Math.min(a, b)); high = Math.min(high, Math.max(a, b));
+      if (low > high) { blocked = false; break; }
+    }
+    if (blocked) nearest = low;
+  }
+  return nearest;
 }
 
 function makeSector(range: number, fov: number, color: string) {
@@ -78,7 +125,7 @@ function makeSector(range: number, fov: number, color: string) {
   for (let step = 0; step <= 24; step++) { const angle = -radians / 2 + radians * step / 24; shape.lineTo(Math.sin(angle) * range * scale, Math.cos(angle) * range * scale); }
   shape.lineTo(0, 0);
   const mesh = new THREE.Mesh(new THREE.ShapeGeometry(shape), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.10, side: THREE.DoubleSide, depthWrite: false }));
-  mesh.rotation.x = -Math.PI / 2; mesh.position.y = 0.015;
+  mesh.rotation.x = Math.PI / 2; mesh.position.y = 0.015; // +PI/2 maps the shape's +y onto the officer's forward +z
   return mesh;
 }
 
@@ -90,10 +137,10 @@ function makeSectorOutline(range: number, fov: number) {
   return new THREE.Line(geometry, new THREE.LineBasicMaterial({ color: "#bcf574", transparent: true, opacity: 0.82 }));
 }
 
-function makeField(range: number, fov: number, color: string): FieldVisual {
-  const group = new THREE.Group(), coverage = makeSector(range, fov, color), left = makeSector(range, fov, "#76baff"), right = makeSector(range, fov, "#76baff"), overlap = makeSectorOutline(range, fov);
-  group.add(coverage, left, right, overlap);
-  return { group, coverage, left, right, overlap };
+function makeField(range: number, fov: number): FieldVisual {
+  const group = new THREE.Group(), left = makeSector(range, fov, "#76baff"), right = makeSector(range, fov, "#76baff"), overlap = makeSectorOutline(range, fov);
+  group.add(left, right, overlap);
+  return { group, left, right, overlap };
 }
 
 function makeContactVisual(): ContactVisual {
@@ -143,15 +190,15 @@ export default function SimulationScene({ world, options, contacts, overlays, on
     const light = new THREE.DirectionalLight("#d9f5ff", 2.5); light.position.set(5, 10, 3); scene.add(light);
     const ground = new THREE.Mesh(new THREE.PlaneGeometry(20, 13.6), new THREE.MeshStandardMaterial({ color: "#14232b", roughness: 0.95 })); ground.rotation.x = -Math.PI / 2; scene.add(ground);
     const grid = new THREE.GridHelper(20, 25, "#293a43", "#1b2a32"); grid.position.y = 0.005; scene.add(grid);
-    const people = new Map<string, THREE.Group>(), fields = new Map<string, FieldVisual>(), contactVisuals = new Map<string, ContactVisual>(), directSkeletonVisuals = new Map<string, SkeletonVisual>(), overlaySkeletonVisuals = new Map<string, SkeletonVisual>(), freeOverlaySkeletonVisuals: SkeletonVisual[] = [], linkVisuals = new Map<string, LinkVisual>();
-    const linkGroup = new THREE.Group(), fovGroup = new THREE.Group(), wallGroup = new THREE.Group(), contactGroup = new THREE.Group(), skeletonGroup = new THREE.Group(); scene.add(linkGroup, fovGroup, wallGroup, contactGroup, skeletonGroup);
+    const people = new Map<string, THREE.Group>(), officerVisuals = new Map<string, OfficerVisual>(), gazeGroup = new THREE.Group(), fields = new Map<string, FieldVisual>(), contactVisuals = new Map<string, ContactVisual>(), directSkeletonVisuals = new Map<string, SkeletonVisual>(), overlaySkeletonVisuals = new Map<string, SkeletonVisual>(), freeOverlaySkeletonVisuals: SkeletonVisual[] = [], linkVisuals = new Map<string, LinkVisual>();
+    const linkGroup = new THREE.Group(), fovGroup = new THREE.Group(), wallGroup = new THREE.Group(), contactGroup = new THREE.Group(), skeletonGroup = new THREE.Group(); scene.add(linkGroup, fovGroup, wallGroup, contactGroup, skeletonGroup, gazeGroup);
     const raycaster = new THREE.Raycaster(), pointer = new THREE.Vector2(); let lastWorld: World | null = null;
     const clearGroup = (group: THREE.Group) => { for (const child of [...group.children]) { group.remove(child); disposeObject(child); } };
     const rebuild = (w: World) => {
       for (const person of people.values()) { scene.remove(person); disposeObject(person); }
-      clearGroup(fovGroup); clearGroup(wallGroup); clearGroup(contactGroup); clearGroup(linkGroup); clearGroup(skeletonGroup); people.clear(); fields.clear(); contactVisuals.clear(); directSkeletonVisuals.clear(); overlaySkeletonVisuals.clear(); freeOverlaySkeletonVisuals.length = 0; linkVisuals.clear();
+      clearGroup(fovGroup); clearGroup(wallGroup); clearGroup(contactGroup); clearGroup(linkGroup); clearGroup(skeletonGroup); clearGroup(gazeGroup); people.clear(); officerVisuals.clear(); fields.clear(); contactVisuals.clear(); directSkeletonVisuals.clear(); overlaySkeletonVisuals.clear(); freeOverlaySkeletonVisuals.length = 0; linkVisuals.clear();
       for (const wall of w.walls) { const mesh = new THREE.Mesh(new THREE.BoxGeometry(wall.w * scale, 2.2, wall.h * scale), new THREE.MeshStandardMaterial({ color: "#35434d", roughness: 0.72 })); mesh.position.copy(point(wall.x + wall.w / 2, wall.y + wall.h / 2, 1.1)); wallGroup.add(mesh); }
-      for (const officer of w.officers) { const person = makePerson("#76baff", true); person.userData.officerId = officer.id; people.set(officer.id, person); scene.add(person); const field = makeField(options.current.range, options.current.fov, officer.id === options.current.selected ? "#bcf574" : "#76baff"); fields.set(officer.id, field); fovGroup.add(field.group); }
+      for (const officer of w.officers) { const { group: person, visual } = makeOfficer("#76baff"); person.userData.officerId = officer.id; people.set(officer.id, person); officerVisuals.set(officer.id, visual); scene.add(person); gazeGroup.add(visual.gaze, visual.gazePoint); const field = makeField(options.current.range, options.current.fov); fields.set(officer.id, field); fovGroup.add(field.group); }
       for (const target of w.targets) {
         const person = makePerson("#ff8b79"); people.set(target.id, person); scene.add(person);
         const visual = makeContactVisual(); contactVisuals.set(target.id, visual); contactGroup.add(visual.arrow, visual.trail, visual.ring, visual.outline);
@@ -162,7 +209,7 @@ export default function SimulationScene({ world, options, contacts, overlays, on
       lastWorld = w;
     };
     const resize = () => { const { width, height } = element.getBoundingClientRect(); renderer.setSize(Math.max(width, 1), Math.max(height, 1), false); camera.aspect = Math.max(width, 1) / Math.max(height, 1); camera.updateProjectionMatrix(); };
-    const select = (event: PointerEvent) => { renderer.domElement.focus(); const bounds = renderer.domElement.getBoundingClientRect(); pointer.set(((event.clientX - bounds.left) / bounds.width) * 2 - 1, -((event.clientY - bounds.top) / bounds.height) * 2 + 1); raycaster.setFromCamera(pointer, camera); const hit = raycaster.intersectObjects([...people.values()], true).find((item) => item.object.parent?.userData.officerId || item.object.userData.officerId); const group = hit?.object.parent?.userData.officerId ? hit.object.parent : hit?.object; if (group?.userData.officerId) onSelect(group.userData.officerId); };
+    const select = (event: PointerEvent) => { renderer.domElement.focus(); const bounds = renderer.domElement.getBoundingClientRect(); pointer.set(((event.clientX - bounds.left) / bounds.width) * 2 - 1, -((event.clientY - bounds.top) / bounds.height) * 2 + 1); raycaster.setFromCamera(pointer, camera); const officerOf = (object: THREE.Object3D | null): string | undefined => object ? object.userData.officerId ?? officerOf(object.parent) : undefined; const id = raycaster.intersectObjects([...people.values()], true).map((item) => officerOf(item.object)).find(Boolean); if (id) onSelect(id); };
     const keyDown = (event: KeyboardEvent) => { const key = event.key.toLowerCase(); if (["w", "a", "s", "d", "q", "e", "arrowup", "arrowdown", "arrowleft", "arrowright", " "].includes(key)) { event.preventDefault(); onKeyDown(key, event.repeat); } };
     const keyUp = (event: KeyboardEvent) => onKeyUp(event.key.toLowerCase());
     const observer = new ResizeObserver(resize); observer.observe(element); renderer.domElement.addEventListener("pointerdown", select); renderer.domElement.addEventListener("keydown", keyDown); window.addEventListener("keyup", keyUp); window.addEventListener("blur", onClearKeys); document.addEventListener("visibilitychange", onClearKeys); resize();
@@ -173,9 +220,13 @@ export default function SimulationScene({ world, options, contacts, overlays, on
         if (w !== lastWorld || people.size !== w.officers.length + w.targets.length) rebuild(w);
         const selected = w.officers.find((item) => item.id === settings.selected) ?? w.officers[0]; pulse += 0.045;
         for (const officer of w.officers) {
-          const mesh = people.get(officer.id)!; mesh.position.copy(point(officer.x, officer.y)); mesh.rotation.y = Math.PI / 2 - officer.angle; ((mesh.children[0] as THREE.Mesh).material as THREE.MeshStandardMaterial).color.set(officer.id === selected.id ? "#bcf574" : "#76baff");
-          const rig = (mesh.children[2] as THREE.Group).userData.rig as StereoRigVisual, separation = THREE.MathUtils.clamp(settings.baseline * scale * UNITS_PER_METRE, 0.045, 0.22); rig.lenses[0].position.x = -separation / 2; rig.lenses[1].position.x = separation / 2;
-          const field = fields.get(officer.id)!; field.group.position.copy(point(officer.x, officer.y)); field.group.rotation.y = Math.PI / 2 - officer.angle; field.coverage.visible = settings.cones && (settings.mode === "overview" || officer.id === selected.id) && officer.id !== selected.id; field.left.visible = settings.cones && officer.id === selected.id; field.right.visible = field.left.visible; field.overlap.visible = field.left.visible; field.left.position.x = -separation / 2; field.right.position.x = separation / 2; field.overlap.position.z = Math.max(0.045, separation);
+          const mesh = people.get(officer.id)!, visual = officerVisuals.get(officer.id)!, isSelected = officer.id === selected.id, tone = isSelected ? "#bcf574" : "#76baff"; mesh.position.copy(point(officer.x, officer.y)); mesh.rotation.y = Math.PI / 2 - officer.angle; (visual.body.material as THREE.MeshStandardMaterial).color.set(tone);
+          // In glasses mode the camera sits inside this officer's eyes, so their own body would only occlude the view.
+          const firstPerson = settings.mode === "glasses" && isSelected; mesh.visible = !firstPerson;
+          const separation = THREE.MathUtils.clamp(settings.baseline * scale * UNITS_PER_METRE, 0.045, 0.22); const lensSpacing = THREE.MathUtils.clamp(eyeSpacing * settings.baseline / defaultBaseline, 0.05, 0.28); visual.rig.lenses[0].position.x = -lensSpacing / 2; visual.rig.lenses[1].position.x = lensSpacing / 2;
+          const dx = Math.cos(officer.angle), dy = Math.sin(officer.angle), eyeX = officer.x + dx * headRadius / scale, eyeY = officer.y + dy * headRadius / scale, reach = rayToWalls(eyeX, eyeY, dx, dy, w.walls, settings.range), from = point(eyeX, eyeY, eyeHeight), to = point(eyeX + dx * reach, eyeY + dy * reach, eyeHeight);
+          visual.gazePosition.setXYZ(0, from.x, from.y, from.z); visual.gazePosition.setXYZ(1, to.x, to.y, to.z); visual.gazePosition.needsUpdate = true; visual.gazeMaterial.color.set(tone); visual.gazeMaterial.opacity = isSelected ? 0.9 : 0.55; (visual.gazePoint.material as THREE.MeshBasicMaterial).color.set(tone); visual.gazePoint.position.copy(to); visual.gaze.visible = !firstPerson; visual.gazePoint.visible = true;
+          const field = fields.get(officer.id)!, showField = settings.cones && (settings.mode === "overview" || isSelected); field.group.position.copy(point(eyeX, eyeY)); field.group.rotation.y = Math.PI / 2 - officer.angle; field.left.visible = showField; field.right.visible = showField; field.overlap.visible = showField; ((field.overlap.material as THREE.LineBasicMaterial)).color.set(tone); field.left.position.x = -separation / 2; field.right.position.x = separation / 2; field.overlap.position.z = Math.max(0.045, separation);
         }
         const live = new Map(contacts.current.map((item) => [item.targetId, item]));
         for (const target of w.targets) {
@@ -193,7 +244,12 @@ export default function SimulationScene({ world, options, contacts, overlays, on
         const layers = overlays.current, frameIds = new Set(layers.map((layer) => layer.frameId));
         for (const [frameId, visual] of overlaySkeletonVisuals) { if (!frameIds.has(frameId)) { overlaySkeletonVisuals.delete(frameId); visual.bones.visible = false; visual.joints.visible = false; freeOverlaySkeletonVisuals.push(visual); } else { visual.bones.visible = false; visual.joints.visible = false; } }
         if (settings.skeletons && settings.sharing) for (const layer of layers) { let visual = overlaySkeletonVisuals.get(layer.frameId); if (!visual) { visual = freeOverlaySkeletonVisuals.pop(); if (!visual && overlaySkeletonVisuals.size < 48) { visual = makeSkeletonVisual(0.28); skeletonGroup.add(visual.bones, visual.joints); } if (!visual) continue; overlaySkeletonVisuals.set(layer.frameId, visual); } writeSkeleton(layer.skeleton, visual, layer.opacity * settings.overlayOpacity); visual.bones.visible = true; visual.joints.visible = true; }
-        if (settings.mode === "glasses") { const rig = (people.get(selected.id)!.children[2] as THREE.Group).userData.rig as StereoRigVisual; camera.position.copy(point(selected.x, selected.y, rig.mountHeight)); camera.lookAt(point(selected.x + Math.cos(selected.angle) * 100, selected.y + Math.sin(selected.angle) * 100, 1.4)); camera.fov = settings.fov; camera.updateProjectionMatrix(); } else { camera.fov = 48; camera.position.set(8.5, 12.5, 11.5); camera.lookAt(0, 0, 0); camera.updateProjectionMatrix(); }
+        if (settings.mode === "glasses") {
+          // The view is the rig's view: same eye-level optical centre, level axis, and the rig's horizontal FOV.
+          const dx = Math.cos(selected.angle), dy = Math.sin(selected.angle), eyeX = selected.x + dx * headRadius / scale, eyeY = selected.y + dy * headRadius / scale;
+          camera.position.copy(point(eyeX, eyeY, eyeHeight)); camera.lookAt(point(eyeX + dx * 100, eyeY + dy * 100, eyeHeight));
+          camera.fov = Math.min(170, THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(settings.fov) / 2) / camera.aspect))); camera.updateProjectionMatrix();
+        } else { camera.fov = 48; camera.position.set(8.5, 12.5, 11.5); camera.lookAt(0, 0, 0); camera.updateProjectionMatrix(); }
       }
       renderer.render(scene, camera); frame = requestAnimationFrame(render);
     };
