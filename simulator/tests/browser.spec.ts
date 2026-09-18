@@ -51,6 +51,40 @@ test("3D controls retain movement, scanning, reset and team sizing", async ({ pa
   await expect(page.locator(".map-state")).toContainText("PAUSED");
 });
 
+test("stereo rig telemetry reacts to the baseline and range controls", async ({ page }) => {
+  await pausedScene(page);
+  const readout = page.locator(".vision-readout");
+  await expect(readout).toContainText("BASELINE");
+  await expect(readout).toContainText("DISPARITY");
+  await expect(readout).toContainText("DEPTH σ");
+  const baseline = page.getByRole("slider", { name: "Stereo baseline" });
+  await expect(readout.locator("div", { hasText: "BASELINE" }).first()).toContainText("8.0");
+  await baseline.fill("24");
+  await expect(readout.locator("div", { hasText: "BASELINE" }).first()).toContainText("24.0");
+  // A wider baseline triangulates further, so the reported reach must not shrink.
+  const reach = async () => Number((await readout.locator("div", { hasText: "REACH" }).first().innerText()).replace(/[^\d.]/g, ""));
+  const wide = await reach();
+  await page.getByRole("slider", { name: "Camera range" }).fill("150");
+  await expect.poll(reach).toBeLessThan(wide);
+});
+
+test("movement marking exposes live speed, heading and motion toggles", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("canvas")).toBeVisible();
+  await page.getByRole("switch", { name: "Shared vision" }).check();
+  const motion = page.locator(".contact .motion").first();
+  await expect(motion).toBeVisible();
+  await expect(motion).toContainText("m/s");
+  await expect(motion).toContainText("°");
+  for (const label of ["Movement trails", "Velocity vectors"]) {
+    const toggle = page.getByRole("checkbox", { name: label });
+    await expect(toggle).toBeChecked();
+    await toggle.uncheck();
+    await expect(toggle).not.toBeChecked();
+    await toggle.check();
+  }
+});
+
 test("responsive 3D canvas remains inside the viewport", async ({ page }) => {
   await pausedScene(page);
   for (const width of [375, 760, 1024, 1440]) {
@@ -58,4 +92,37 @@ test("responsive 3D canvas remains inside the viewport", async ({ page }) => {
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     await expect(page.locator(".three-canvas canvas")).toBeVisible();
   }
+});
+
+test("published poses and teammate overlays are reported and adjustable", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await pausedScene(page);
+  const readout = page.locator(".overlay-readout");
+  await expect(readout).toContainText("PUBLISHED");
+  await expect(readout).toContainText("RECEIVED");
+  await expect(readout).toContainText("BYPASSED");
+  // A paused scene still has live frames, so the selected officer must be receiving teammate poses.
+  await expect(readout.locator("div").nth(0).locator("strong")).not.toHaveText("0");
+  await expect(readout.locator("div").nth(1).locator("strong")).not.toHaveText("0");
+  await expect(page.locator(".contacts")).toContainText("POSE");
+  const opacity = page.getByRole("slider", { name: "Overlay opacity" });
+  await opacity.fill("80");
+  await expect(page.locator(".panel .tiny", { hasText: "ALPHA" })).toHaveText("80% ALPHA");
+  await opacity.fill("0");
+  await expect(page.locator(".panel .tiny", { hasText: "ALPHA" })).toHaveText("0% ALPHA");
+  expect(errors).toEqual([]);
+});
+
+test("the skeleton overlay toggle stops layers reaching the receiving officer", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await pausedScene(page);
+  const received = page.locator(".overlay-readout div").nth(1).locator("strong");
+  await expect(received).not.toHaveText("0");
+  await page.getByRole("checkbox", { name: "Skeleton overlay" }).uncheck();
+  await expect(received).toHaveText("0");
+  await page.getByRole("checkbox", { name: "Skeleton overlay" }).check();
+  await expect(received).not.toHaveText("0");
+  expect(errors).toEqual([]);
 });

@@ -12,7 +12,6 @@ import {
   moveAgent,
 } from "../src/simulation.js";
 import {
-  createSimulatedDetectionProvider,
   createSimulatedPoseProvider,
   SensorFusion,
   TrackStore,
@@ -320,21 +319,12 @@ test("one large timestep matches many fixed ticks without crossing the opaque wa
   });
 });
 
-test("simulated sensor providers use the production-shaped 3D data contract", () => {
+test("simulated pose provider uses the production-shaped 3D data contract", () => {
   const world = createWorld(5);
   const poses = createSimulatedPoseProvider(world).read(1234);
   assert.equal(poses.length, 5);
   assert.deepEqual(Object.keys(poses[0]).sort(), ["officerId", "orientation", "position", "timestamp"]);
   assert.deepEqual(Object.keys(poses[0].position).sort(), ["x", "y", "z"]);
-  const detections = createSimulatedDetectionProvider(world).read(1234);
-  assert.ok(detections.length > 0);
-  const report = detections.find((item) => item.trackId === "T1");
-  assert.equal(report.timestamp, 1234);
-  assert.equal(report.officerId, "P1");
-  assert.equal(report.trackId, "T1");
-  assert.equal(report.position.z, world.targets[0].y);
-  assert.ok(report.confidence > 0 && report.confidence <= 1);
-  assert.deepEqual(Object.keys(report.velocity).sort(), ["x", "y", "z"]);
 });
 
 test("sensor fusion keeps a live, confidence-weighted track and expires stale location", () => {

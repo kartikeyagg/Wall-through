@@ -1,13 +1,13 @@
 /**
- * Hardware-neutral sensor contract. Future camera, RealSense and LiDAR
- * adapters must emit SensorDetection objects with this same shape.
+ * Hardware-neutral sensor contract. The head-mounted stereo camera
+ * (`createStereoVisionProvider` in vision.js) is the only detection source;
+ * a physical stereo rig would emit SensorDetection objects with this same shape.
  * Coordinates are right-handed metres-in-simulation: x across, y up, z deep.
  *
  * @typedef {{ timestamp: number, officerId: string, trackId: string, position: {x:number,y:number,z:number}, confidence: number, velocity?: {x:number,y:number,z:number}, outline?: object, sensor?: {kind:string,id:string} }} SensorDetection
  * @typedef {{ source: string, read: (timestamp?: number) => Array<{officerId:string,timestamp:number,position:{x:number,y:number,z:number},orientation:{yaw:number,pitch:number,roll:number}}> }} PoseProvider
  * @typedef {{ source: string, read: (timestamp?: number) => SensorDetection[] }} DetectionProvider
  */
-import { canSee } from "./simulation.js";
 
 export function toSensorPosition(agent, height = 1) {
   return { x: agent.x, y: height, z: agent.y };
@@ -24,29 +24,6 @@ export function createSimulatedPoseProvider(world) {
         position: toSensorPosition(officer, 1.7),
         orientation: { yaw: officer.angle, pitch: 0, roll: 0 },
       }));
-    },
-  };
-}
-
-export function createSimulatedDetectionProvider(world, { range = 420, fov = Math.PI * 0.65 } = {}) {
-  /** @type {DetectionProvider} */
-  return {
-    source: "simulated-camera",
-    read(timestamp = world.time * 1000) {
-      return world.officers.flatMap((officer) =>
-        world.targets
-          .filter((target) => canSee(officer, target, world.walls, range, fov))
-          .map((target) => ({
-            timestamp,
-            officerId: officer.id,
-            trackId: target.id,
-            position: toSensorPosition(target),
-            velocity: { x: Math.cos(target.angle) * 44, y: 0, z: Math.sin(target.angle) * 44 },
-            confidence: 0.99,
-            outline: { type: "capsule", height: 1.75, radius: 0.28 },
-            sensor: { kind: "camera", id: `${officer.id}-sim-camera` },
-          })),
-      );
     },
   };
 }
