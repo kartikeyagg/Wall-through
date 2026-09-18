@@ -93,3 +93,36 @@ test("responsive 3D canvas remains inside the viewport", async ({ page }) => {
     await expect(page.locator(".three-canvas canvas")).toBeVisible();
   }
 });
+
+test("published poses and teammate overlays are reported and adjustable", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await pausedScene(page);
+  const readout = page.locator(".overlay-readout");
+  await expect(readout).toContainText("PUBLISHED");
+  await expect(readout).toContainText("RECEIVED");
+  await expect(readout).toContainText("BYPASSED");
+  // A paused scene still has live frames, so the selected officer must be receiving teammate poses.
+  await expect(readout.locator("div").nth(0).locator("strong")).not.toHaveText("0");
+  await expect(readout.locator("div").nth(1).locator("strong")).not.toHaveText("0");
+  await expect(page.locator(".contacts")).toContainText("POSE");
+  const opacity = page.getByRole("slider", { name: "Overlay opacity" });
+  await opacity.fill("80");
+  await expect(page.locator(".panel .tiny", { hasText: "ALPHA" })).toHaveText("80% ALPHA");
+  await opacity.fill("0");
+  await expect(page.locator(".panel .tiny", { hasText: "ALPHA" })).toHaveText("0% ALPHA");
+  expect(errors).toEqual([]);
+});
+
+test("the skeleton overlay toggle stops layers reaching the receiving officer", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await pausedScene(page);
+  const received = page.locator(".overlay-readout div").nth(1).locator("strong");
+  await expect(received).not.toHaveText("0");
+  await page.getByRole("checkbox", { name: "Skeleton overlay" }).uncheck();
+  await expect(received).toHaveText("0");
+  await page.getByRole("checkbox", { name: "Skeleton overlay" }).check();
+  await expect(received).not.toHaveText("0");
+  expect(errors).toEqual([]);
+});

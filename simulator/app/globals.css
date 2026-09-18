@@ -531,6 +531,67 @@ h2 {
   width: 4px;
   height: 4px;
 }
+.overlay-readout {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px 8px;
+  border-top: 1px solid var(--line);
+  padding-top: 15px;
+  margin-top: 15px;
+}
+.overlay-readout div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.overlay-readout strong {
+  color: #e5ebef;
+  font: 15px monospace;
+  letter-spacing: -0.5px;
+  white-space: nowrap;
+}
+.overlay-readout span {
+  color: var(--muted);
+  font: 8px monospace;
+  letter-spacing: 0.7px;
+}
+.overlay-readout small {
+  color: #71838f;
+  font-size: 9px;
+  margin-left: 1px;
+}
+.contact .pose {
+  display: inline-block;
+  color: #b8c4ca;
+  background: #1a252d;
+  border: 1px solid #2b3840;
+  border-radius: 3px;
+  padding: 2px 4px;
+  font: 8px monospace;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.contact-icon.posed {
+  color: #76e5ef;
+  text-shadow: 0 0 9px rgba(118, 229, 239, 0.3);
+}
+.legend .skeleton {
+  width: 15px;
+  height: 2px;
+  background: linear-gradient(90deg, #76e5ef, #ffd479);
+}
+.legend .overlay {
+  width: 15px;
+  height: 2px;
+  background: rgba(188, 245, 116, 0.42);
+}
+.overlay-note {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.55;
+  margin: 15px 0 0;
+}
 .empty {
   font-size: 11px;
   color: var(--muted);

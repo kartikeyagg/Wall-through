@@ -2,6 +2,9 @@
 
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
+import { BONES, skeletonSegments } from "./skeleton.js";
+import type { Skeleton } from "./skeleton.js";
+import type { OverlayLayer } from "./overlay.js";
 import type { World } from "./simulation.js";
 import type { VisionObservation } from "./vision.js";
 
@@ -13,6 +16,8 @@ export type SceneOptions = {
   cones: boolean;
   links: boolean;
   sharing: boolean;
+  skeletons: boolean;
+  overlayOpacity: number;
   trails: boolean;
   vectors: boolean;
   baseline: number;
@@ -24,6 +29,7 @@ type Props = {
   world: React.MutableRefObject<World | null>;
   options: React.MutableRefObject<SceneOptions>;
   contacts: React.MutableRefObject<VisionContact[]>;
+  overlays: React.MutableRefObject<OverlayLayer[]>;
   onSelect: (id: string) => void;
   onKeyDown: (key: string, repeated: boolean) => void;
   onKeyUp: (key: string) => void;
@@ -33,12 +39,15 @@ type Props = {
 const scale = 0.02;
 const UNITS_PER_METRE = 24;
 const rigMountHeight = 1.55;
+const skeletonMinScore = 0.32;
+const overlayTintColor = new THREE.Color("#bcf574");
 const point = (x: number, y: number, height = 0) => new THREE.Vector3((x - 500) * scale, height, (y - 340) * scale);
 
 type StereoRigVisual = { group: THREE.Group; lenses: [THREE.Mesh, THREE.Mesh]; mountHeight: number };
 type FieldVisual = { group: THREE.Group; coverage: THREE.Mesh; left: THREE.Mesh; right: THREE.Mesh; overlap: THREE.Line };
 type ContactVisual = { arrow: THREE.LineSegments; arrowMaterial: THREE.LineBasicMaterial; trail: THREE.Line; trailPosition: THREE.BufferAttribute; trailColor: THREE.BufferAttribute; ring: THREE.LineLoop; ringMaterial: THREE.LineBasicMaterial; outline: THREE.LineSegments; outlineMaterial: THREE.LineBasicMaterial };
 type LinkVisual = { line: THREE.Line; position: THREE.BufferAttribute; distance: THREE.BufferAttribute };
+type SkeletonVisual = { bones: THREE.LineSegments; bonesMaterial: THREE.LineBasicMaterial; bonesPosition: THREE.BufferAttribute; bonesColor: THREE.BufferAttribute; joints: THREE.Points; jointsMaterial: THREE.PointsMaterial; jointsPosition: THREE.BufferAttribute; jointsColor: THREE.BufferAttribute; tint: number; color: THREE.Color };
 
 function makeStereoRig(): StereoRigVisual {
   const group = new THREE.Group();
@@ -101,11 +110,28 @@ function makeContactVisual(): ContactVisual {
   return { arrow, arrowMaterial, trail, trailPosition, trailColor, ring, ringMaterial, outline, outlineMaterial };
 }
 
+function makeSkeletonVisual(tint = 0): SkeletonVisual {
+  const bonesGeometry = new THREE.BufferGeometry(), bonesPosition = new THREE.BufferAttribute(new Float32Array(BONES.length * 2 * 3), 3), bonesColor = new THREE.BufferAttribute(new Float32Array(BONES.length * 2 * 3), 3);
+  bonesGeometry.setAttribute("position", bonesPosition); bonesGeometry.setAttribute("color", bonesColor);
+  const bonesMaterial = new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, depthTest: false }), bones = new THREE.LineSegments(bonesGeometry, bonesMaterial); bones.renderOrder = 1000;
+  const jointsGeometry = new THREE.BufferGeometry(), jointsPosition = new THREE.BufferAttribute(new Float32Array(18 * 3), 3), jointsColor = new THREE.BufferAttribute(new Float32Array(18 * 3), 3);
+  jointsGeometry.setAttribute("position", jointsPosition); jointsGeometry.setAttribute("color", jointsColor);
+  const jointsMaterial = new THREE.PointsMaterial({ size: 0.013, sizeAttenuation: true, vertexColors: true, transparent: true, depthTest: false }), joints = new THREE.Points(jointsGeometry, jointsMaterial); joints.renderOrder = 1000;
+  return { bones, bonesMaterial, bonesPosition, bonesColor, joints, jointsMaterial, jointsPosition, jointsColor, tint, color: new THREE.Color() };
+}
+
+function writeSkeleton(skeleton: Skeleton, visual: SkeletonVisual, opacity: number) {
+  const segments = skeletonSegments(skeleton, skeletonMinScore), boneCount = Math.min(segments.length, BONES.length); let jointCount = 0;
+  for (let index = 0; index < boneCount; index++) { const segment = segments[index], from = point(segment.from.x, segment.from.z, segment.from.y * scale), to = point(segment.to.x, segment.to.z, segment.to.y * scale); visual.bonesPosition.setXYZ(index * 2, from.x, from.y, from.z); visual.bonesPosition.setXYZ(index * 2 + 1, to.x, to.y, to.z); visual.color.set(segment.color); if (visual.tint) visual.color.lerp(overlayTintColor, visual.tint); visual.color.multiplyScalar(0.4 + 0.6 * segment.score); visual.bonesColor.setXYZ(index * 2, visual.color.r, visual.color.g, visual.color.b); visual.bonesColor.setXYZ(index * 2 + 1, visual.color.r, visual.color.g, visual.color.b); }
+  for (const joint of skeleton.joints) { if (joint.score < skeletonMinScore) continue; const position = point(joint.x, joint.z, joint.y * scale); visual.jointsPosition.setXYZ(jointCount, position.x, position.y, position.z); const shade = 0.4 + 0.6 * joint.score; visual.jointsColor.setXYZ(jointCount, 0.9 * shade, 0.96 * shade, 0.94 * shade); jointCount++; }
+  visual.bonesPosition.needsUpdate = true; visual.bonesColor.needsUpdate = true; visual.bones.geometry.setDrawRange(0, boneCount * 2); visual.jointsPosition.needsUpdate = true; visual.jointsColor.needsUpdate = true; visual.joints.geometry.setDrawRange(0, jointCount); visual.bonesMaterial.opacity = opacity; visual.jointsMaterial.opacity = opacity;
+}
+
 function disposeObject(object: THREE.Object3D) {
   object.traverse((child) => { const mesh = child as THREE.Mesh; mesh.geometry?.dispose(); const material = mesh.material; if (Array.isArray(material)) material.forEach((item) => item.dispose()); else material?.dispose(); });
 }
 
-export default function SimulationScene({ world, options, contacts, onSelect, onKeyDown, onKeyUp, onClearKeys }: Props) {
+export default function SimulationScene({ world, options, contacts, overlays, onSelect, onKeyDown, onKeyUp, onClearKeys }: Props) {
   const host = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const element = host.current;
@@ -117,18 +143,19 @@ export default function SimulationScene({ world, options, contacts, onSelect, on
     const light = new THREE.DirectionalLight("#d9f5ff", 2.5); light.position.set(5, 10, 3); scene.add(light);
     const ground = new THREE.Mesh(new THREE.PlaneGeometry(20, 13.6), new THREE.MeshStandardMaterial({ color: "#14232b", roughness: 0.95 })); ground.rotation.x = -Math.PI / 2; scene.add(ground);
     const grid = new THREE.GridHelper(20, 25, "#293a43", "#1b2a32"); grid.position.y = 0.005; scene.add(grid);
-    const people = new Map<string, THREE.Group>(), fields = new Map<string, FieldVisual>(), contactVisuals = new Map<string, ContactVisual>(), linkVisuals = new Map<string, LinkVisual>();
-    const linkGroup = new THREE.Group(), fovGroup = new THREE.Group(), wallGroup = new THREE.Group(), contactGroup = new THREE.Group(); scene.add(linkGroup, fovGroup, wallGroup, contactGroup);
+    const people = new Map<string, THREE.Group>(), fields = new Map<string, FieldVisual>(), contactVisuals = new Map<string, ContactVisual>(), directSkeletonVisuals = new Map<string, SkeletonVisual>(), overlaySkeletonVisuals = new Map<string, SkeletonVisual>(), freeOverlaySkeletonVisuals: SkeletonVisual[] = [], linkVisuals = new Map<string, LinkVisual>();
+    const linkGroup = new THREE.Group(), fovGroup = new THREE.Group(), wallGroup = new THREE.Group(), contactGroup = new THREE.Group(), skeletonGroup = new THREE.Group(); scene.add(linkGroup, fovGroup, wallGroup, contactGroup, skeletonGroup);
     const raycaster = new THREE.Raycaster(), pointer = new THREE.Vector2(); let lastWorld: World | null = null;
     const clearGroup = (group: THREE.Group) => { for (const child of [...group.children]) { group.remove(child); disposeObject(child); } };
     const rebuild = (w: World) => {
       for (const person of people.values()) { scene.remove(person); disposeObject(person); }
-      clearGroup(fovGroup); clearGroup(wallGroup); clearGroup(contactGroup); clearGroup(linkGroup); people.clear(); fields.clear(); contactVisuals.clear(); linkVisuals.clear();
+      clearGroup(fovGroup); clearGroup(wallGroup); clearGroup(contactGroup); clearGroup(linkGroup); clearGroup(skeletonGroup); people.clear(); fields.clear(); contactVisuals.clear(); directSkeletonVisuals.clear(); overlaySkeletonVisuals.clear(); freeOverlaySkeletonVisuals.length = 0; linkVisuals.clear();
       for (const wall of w.walls) { const mesh = new THREE.Mesh(new THREE.BoxGeometry(wall.w * scale, 2.2, wall.h * scale), new THREE.MeshStandardMaterial({ color: "#35434d", roughness: 0.72 })); mesh.position.copy(point(wall.x + wall.w / 2, wall.y + wall.h / 2, 1.1)); wallGroup.add(mesh); }
       for (const officer of w.officers) { const person = makePerson("#76baff", true); person.userData.officerId = officer.id; people.set(officer.id, person); scene.add(person); const field = makeField(options.current.range, options.current.fov, officer.id === options.current.selected ? "#bcf574" : "#76baff"); fields.set(officer.id, field); fovGroup.add(field.group); }
       for (const target of w.targets) {
         const person = makePerson("#ff8b79"); people.set(target.id, person); scene.add(person);
         const visual = makeContactVisual(); contactVisuals.set(target.id, visual); contactGroup.add(visual.arrow, visual.trail, visual.ring, visual.outline);
+        const skeletonVisual = makeSkeletonVisual(); directSkeletonVisuals.set(target.id, skeletonVisual); skeletonGroup.add(skeletonVisual.bones, skeletonVisual.joints);
         const geometry = new THREE.BufferGeometry(), position = new THREE.BufferAttribute(new Float32Array(6), 3), distance = new THREE.BufferAttribute(new Float32Array(2), 1); geometry.setAttribute("position", position); geometry.setAttribute("lineDistance", distance);
         const line = new THREE.Line(geometry, new THREE.LineDashedMaterial({ color: "#bcf574", dashSize: 0.12, gapSize: 0.12, transparent: true, opacity: 0.65 })); line.visible = false; linkGroup.add(line); linkVisuals.set(target.id, { line, position, distance });
       }
@@ -153,6 +180,7 @@ export default function SimulationScene({ world, options, contacts, onSelect, on
         const live = new Map(contacts.current.map((item) => [item.targetId, item]));
         for (const target of w.targets) {
           const mesh = people.get(target.id)!, contact = live.get(target.id), visual = contactVisuals.get(target.id)!; mesh.visible = settings.mode === "overview" || Boolean(contact); mesh.position.copy(point(target.x, target.y)); mesh.rotation.y = Math.PI / 2 - target.angle; ((mesh.children[0] as THREE.Mesh).material as THREE.MeshStandardMaterial).opacity = contact?.coasting ? 0.42 : 1;
+          const skeletonVisual = directSkeletonVisuals.get(target.id)!; skeletonVisual.bones.visible = false; skeletonVisual.joints.visible = false;
           visual.arrow.visible = Boolean(contact?.moving && settings.vectors); visual.trail.visible = Boolean(contact && settings.trails); visual.ring.visible = Boolean(contact); visual.outline.visible = contact?.kind === "shared"; const link = linkVisuals.get(target.id)!; link.line.visible = false;
           if (!contact) continue;
           const contactPoint = point(contact.x, contact.y), shared = contact.kind === "shared", uncertain = contact.coasting; visual.arrow.position.copy(contactPoint); visual.arrow.position.y = 0.055; visual.arrow.rotation.y = Math.PI / 2 - contact.heading; visual.arrow.scale.setScalar(THREE.MathUtils.clamp(contact.speed * scale * 1.4, 0.14, 0.85)); visual.arrowMaterial.color.set(shared ? "#bcf574" : "#ffd479"); visual.arrowMaterial.opacity = uncertain ? 0.42 : 0.9;
@@ -160,13 +188,17 @@ export default function SimulationScene({ world, options, contacts, onSelect, on
           for (let index = 0; index < count; index++) { const sample = trail[start + index], fade = 0.16 + 0.84 * (index + 1) / count; visual.trailPosition.setXYZ(index, (sample.x - 500) * scale, 0, (sample.y - 340) * scale); visual.trailColor.setXYZ(index, base[0] * fade, base[1] * fade, base[2] * fade); }
           visual.trailPosition.needsUpdate = true; visual.trailColor.needsUpdate = true; visual.trail.geometry.setDrawRange(0, count); visual.ring.position.copy(contactPoint); visual.ring.position.y = 0.045; visual.ring.scale.setScalar(Math.max(contact.sigma * scale, 0.025)); visual.ringMaterial.color.set(shared ? "#bcf574" : "#ffd479"); visual.ringMaterial.opacity = uncertain ? 0.16 + (Math.sin(pulse) + 1) * 0.12 : 0.48; visual.outline.position.copy(point(contact.x, contact.y, 0.9)); visual.outlineMaterial.opacity = uncertain ? 0.35 : 1;
           if (settings.links && settings.sharing && shared) { const source = w.officers.find((item) => item.id === contact.observers[0]); if (source) { const from = point(source.x, source.y, 0.08), to = point(selected.x, selected.y, 0.08); link.position.setXYZ(0, from.x, from.y, from.z); link.position.setXYZ(1, to.x, to.y, to.z); link.position.needsUpdate = true; link.distance.setX(0, 0); link.distance.setX(1, from.distanceTo(to)); link.distance.needsUpdate = true; link.line.visible = true; } }
+          if (settings.skeletons && contact.kind === "direct" && contact.skeleton) { writeSkeleton(contact.skeleton, skeletonVisual, 0.95); skeletonVisual.bones.visible = true; skeletonVisual.joints.visible = true; skeletonVisual.jointsMaterial.opacity = 0.9; }
         }
+        const layers = overlays.current, frameIds = new Set(layers.map((layer) => layer.frameId));
+        for (const [frameId, visual] of overlaySkeletonVisuals) { if (!frameIds.has(frameId)) { overlaySkeletonVisuals.delete(frameId); visual.bones.visible = false; visual.joints.visible = false; freeOverlaySkeletonVisuals.push(visual); } else { visual.bones.visible = false; visual.joints.visible = false; } }
+        if (settings.skeletons && settings.sharing) for (const layer of layers) { let visual = overlaySkeletonVisuals.get(layer.frameId); if (!visual) { visual = freeOverlaySkeletonVisuals.pop(); if (!visual && overlaySkeletonVisuals.size < 48) { visual = makeSkeletonVisual(0.28); skeletonGroup.add(visual.bones, visual.joints); } if (!visual) continue; overlaySkeletonVisuals.set(layer.frameId, visual); } writeSkeleton(layer.skeleton, visual, layer.opacity * settings.overlayOpacity); visual.bones.visible = true; visual.joints.visible = true; }
         if (settings.mode === "glasses") { const rig = (people.get(selected.id)!.children[2] as THREE.Group).userData.rig as StereoRigVisual; camera.position.copy(point(selected.x, selected.y, rig.mountHeight)); camera.lookAt(point(selected.x + Math.cos(selected.angle) * 100, selected.y + Math.sin(selected.angle) * 100, 1.4)); camera.fov = settings.fov; camera.updateProjectionMatrix(); } else { camera.fov = 48; camera.position.set(8.5, 12.5, 11.5); camera.lookAt(0, 0, 0); camera.updateProjectionMatrix(); }
       }
       renderer.render(scene, camera); frame = requestAnimationFrame(render);
     };
     frame = requestAnimationFrame(render);
     return () => { cancelAnimationFrame(frame); observer.disconnect(); renderer.domElement.removeEventListener("pointerdown", select); renderer.domElement.removeEventListener("keydown", keyDown); window.removeEventListener("keyup", keyUp); window.removeEventListener("blur", onClearKeys); document.removeEventListener("visibilitychange", onClearKeys); disposeObject(scene); renderer.dispose(); element.replaceChildren(); };
-  }, [contacts, onClearKeys, onKeyDown, onKeyUp, onSelect, options, world]);
+  }, [contacts, onClearKeys, onKeyDown, onKeyUp, onSelect, options, overlays, world]);
   return <div className="three-canvas" ref={host} />;
 }
