@@ -123,6 +123,22 @@ export function visibleTo(world, officerId, observations, sharing = true) {
   });
 }
 
+/**
+ * Every live track the officer knows about, in any direction: their own
+ * measurements plus, with sharing on, teammates'. Unlike `visibleTo`, nothing is
+ * dropped for lying outside the officer's field of view — this feeds the HUD
+ * arrows that point at targets behind their back.
+ */
+export function awareOf(world, officerId, observations, sharing = true) {
+  if (!world.officers.some((item) => item.id === officerId)) return [];
+  return observations.flatMap((observation) => {
+    const direct = observation.observers.includes(officerId);
+    return direct || sharing
+      ? [{ ...observation, kind: direct ? "direct" : "shared" }]
+      : [];
+  });
+}
+
 /** @deprecated Use KinematicPhysicsAdapter; retained for compatible consumers. */
 export function moveAgent(agent, dx, dy, walls, others = []) {
   return moveKinematic(agent, dx, dy, walls, others);
