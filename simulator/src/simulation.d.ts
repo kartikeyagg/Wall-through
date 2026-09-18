@@ -50,12 +50,12 @@ export function stepWorld(
   options?: StepOptions,
 ): World;
 export function observe(world: World, options?: VisionOptions): Observation[];
-export function visibleTo(
+export function visibleTo<T extends Observation>(
   world: World,
   officerId: string,
-  observations: Observation[],
+  observations: T[],
   sharing?: boolean,
-): Contact[];
+): Array<T & { kind: "direct" | "shared" }>;
 export function canSee(
   observer: Point & { angle: number },
   target: Point,
