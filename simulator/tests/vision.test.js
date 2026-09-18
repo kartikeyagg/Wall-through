@@ -11,6 +11,7 @@ import {
   occluded,
   trackObservations,
 } from "../src/vision.js";
+import { detectorInput } from "../src/overlay.js";
 
 function scene(officers, targets, walls = []) {
   return { time: 0, officers, targets, walls };
@@ -106,4 +107,91 @@ test("track observations preserve motion fields and visibleTo ground axes", () =
   const contacts = visibleTo(scene([officer("P1", 0, 0)], [], []), "P1", observations);
   assert.equal(contacts[0].moving, true);
   assert.deepEqual(contacts[0].predicted, { x: 123, y: 44 });
+});
+
+function sharedScene() {
+  return scene(
+    [officer("P1", 0, 0), officer("P2", 0, 80, -Math.atan2(80, 200))],
+    [target("T1", 200, 0)],
+  );
+}
+
+test("a pipeline publishes one skeleton frame for every observing officer", () => {
+  const frame = new StereoVisionPipeline({ noise: false }).update(sharedScene(), 100);
+  assert.equal(frame.skeletons.length, 2);
+  assert.deepEqual(frame.skeletons.map((item) => item.publisherId).sort(), ["P1", "P2"]);
+  assert.ok(frame.detections.every((detection) => detection.skeleton?.trackId === detection.trackId));
+});
+
+test("published skeleton frames are synthetic overlay layers", () => {
+  const frame = new StereoVisionPipeline({ noise: false }).update(sharedScene(), 100);
+  assert.ok(frame.skeletons.every((item) => item.layer === "overlay" && item.synthetic === true));
+});
+
+test("poses false suppresses skeleton publication", () => {
+  const pipeline = new StereoVisionPipeline({ noise: false, poses: false });
+  const frame = pipeline.update(sharedScene(), 100);
+  assert.deepEqual(frame.skeletons, []);
+  assert.ok(frame.detections.every((detection) => !("skeleton" in detection)));
+  assert.deepEqual(pipeline.overlaysFor("P2", 100), []);
+});
+
+test("officers receive teammate skeletons but not their own", () => {
+  const pipeline = new StereoVisionPipeline({ noise: false });
+  pipeline.update(sharedScene(), 100);
+  const layers = pipeline.overlaysFor("P1", 100);
+  assert.equal(layers.some((item) => item.publisherId === "P1"), false);
+  assert.equal(layers.some((item) => item.publisherId === "P2"), true);
+});
+
+test("detector input strips published overlays from a teammate feed", () => {
+  const world = sharedScene();
+  const pipeline = new StereoVisionPipeline({ noise: false });
+  pipeline.update(world, 100);
+  const feed = pipeline.feedFor(world, "P1", 100);
+  assert.ok(feed.overlays.length > 0);
+  assert.equal(detectorInput(feed).filter((item) => item.layer === "overlay" || item.synthetic).length, 0);
+});
+
+test("overlays do not create phantom stereo detections", () => {
+  const world = sharedScene();
+  const shared = new StereoVisionPipeline({ noise: false });
+  const direct = new StereoVisionPipeline({ noise: false, poses: false });
+  shared.update(world, 100);
+  direct.update(world, 100);
+  const withOverlays = shared.update(world, 200);
+  const withoutOverlays = direct.update(world, 200);
+  const fields = (detections) => detections.map((detection) => ({ ...detection, skeleton: undefined }));
+  assert.deepEqual(fields(withOverlays.detections), fields(withoutOverlays.detections));
+});
+
+test("bypassed overlays appear only after teammates have shared poses", () => {
+  const pipeline = new StereoVisionPipeline({ noise: false });
+  assert.equal(pipeline.update(sharedScene(), 100).bypassed, 0);
+  assert.ok(pipeline.update(sharedScene(), 200).bypassed > 0);
+});
+
+test("gait phase survives a configure call that changes only range", () => {
+  const world = scene([officer("P1", 0, 0)], [target("T1", 120, 0)]);
+  const pipeline = new StereoVisionPipeline({ noise: false });
+  pipeline.update(world, 0);
+  world.targets[0].x = 180;
+  pipeline.update(world, 1000);
+  const phase = pipeline.poser.phaseOf("T1");
+  assert.notEqual(phase, 0);
+  pipeline.configure({ range: 400 });
+  assert.equal(pipeline.poser.phaseOf("T1"), phase);
+});
+
+test("track observations attach the highest-confidence supplied skeleton only", () => {
+  const frame = new StereoVisionPipeline({ noise: false }).update(
+    scene([officer("P1", 0, 0)], [target("T1", 120, 0)]),
+    100,
+  );
+  const source = frame.skeletons[0];
+  const low = { ...source, confidence: 0.1, skeleton: { ...source.skeleton, phase: 1 } };
+  const high = { ...source, confidence: 0.9, skeleton: { ...source.skeleton, phase: 2 } };
+  const observations = trackObservations(frame.tracks, { range: 420, fov: Math.PI }, [low, high]);
+  assert.equal(observations[0].skeleton.phase, 2);
+  assert.equal("skeleton" in trackObservations(frame.tracks, { range: 420, fov: Math.PI })[0], false);
 });
