@@ -6,6 +6,8 @@
 import type { Observation, Wall, World } from "./simulation.js";
 import type { CameraPose, StereoRig, StereoRigConfig, Vec3 } from "./stereo.js";
 import type { MotionTrack, TrackerOptions } from "./tracking.js";
+import type { Skeleton, SkeletonOptions } from "./skeleton.js";
+import type { CameraFeed, OverlayBus, OverlayLayer, OverlayOptions, SkeletonFrame } from "./overlay.js";
 /** Simulation ground units per real-world metre. */
 export const UNITS_PER_METRE: number;
 export const TARGET_HEIGHT_METRES: number;
@@ -26,6 +28,8 @@ export interface StereoDetection {
   pixels: { uLeft: number; uRight: number; v: number; heightPx: number; widthPx: number };
   outline: { type: "capsule"; height: number; radius: number };
   sensor: { kind: "stereo-camera"; id: string };
+  /** Pose estimated from this detection, in simulation units. */
+  skeleton?: Skeleton;
 }
 export interface VisionOptions {
   rig?: StereoRigConfig;
@@ -38,6 +42,12 @@ export interface VisionOptions {
   seed?: number;
   /** Set false to disable matcher noise (exact triangulation). */
   noise?: boolean;
+  /** Pose estimator settings; `height` defaults to the target height in units. */
+  skeleton?: SkeletonOptions;
+  /** Set false to stop estimating and publishing poses. Default true. */
+  poses?: boolean;
+  /** Overlay publication and fade settings. */
+  overlay?: OverlayOptions;
 }
 /** Convert an officer body into the pose of the stereo rig on their head. */
 export function officerPose(
@@ -63,13 +73,22 @@ export interface VisionFrame {
   detections: StereoDetection[];
   tracks: MotionTrack[];
   rig: StereoRig;
+  /** Poses published by the officers that resolved each subject this frame. */
+  skeletons: SkeletonFrame[];
+  /** Overlay layers stripped from detector input this frame. */
+  bypassed: number;
 }
 /** Stateful per-frame pipeline: detect, then fuse into motion tracks. */
 export class StereoVisionPipeline {
   constructor(options?: VisionOptions);
   readonly rig: StereoRig;
+  readonly overlays: OverlayBus;
   configure(options: VisionOptions): void;
   update(world: World, timestamp?: number): VisionFrame;
+  /** Teammate skeleton layers this officer should draw over their feed. */
+  overlaysFor(officerId: string, timestamp?: number, options?: OverlayOptions): OverlayLayer[];
+  /** This officer's feed: real subjects plus the overlays the detector bypasses. */
+  feedFor(world: World, officerId: string, timestamp?: number, options?: OverlayOptions): CameraFeed;
   reset(): void;
 }
 export interface VisionObservation extends Observation {
@@ -81,11 +100,14 @@ export interface VisionObservation extends Observation {
   coasting: boolean;
   trail: Array<{ x: number; y: number }>;
   predicted: { x: number; y: number };
+  /** Live pose for this track, when one was estimated. */
+  skeleton?: Skeleton;
 }
 /** Project motion tracks into the array shape `visibleTo` consumes. */
 export function trackObservations(
   tracks: MotionTrack[],
   vision: { range: number; fov: number },
+  skeletons?: SkeletonFrame[],
 ): VisionObservation[];
 /** Straight-line occlusion test against the world's opaque walls. */
 export function occluded(from: { x: number; y: number }, to: { x: number; y: number }, walls: Wall[]): boolean;
