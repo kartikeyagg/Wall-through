@@ -18,23 +18,29 @@ The world overview is an inspectable third-person 3D scene. Officer glasses is a
 | Start / Stop automatic rotation | Make every officer scan; stopping retains headings |
 | World overview / Officer glasses | Switch between third-person and first-person 3D views |
 | Shared vision | Show/hide teammate-provided 3D target outlines |
-| Field of view / range | Adjust source camera detection coverage |
+| Field of view / range | Adjust the stereo rig's horizontal FOV and operator range cutoff |
+| Stereo baseline | Set the lens separation on the head rig, 2–30 cm |
+| Movement trails / Velocity vectors | Show each track's recent path and heading arrow |
 
-Camera range and occlusion apply only to the officer who makes a sensor measurement. A receiving officer still has to face an incoming live track, but is not range-limited. When direct reports stop, a track has a short confidence window before removal instead of becoming a permanent last-known-position marker.
+Camera range and occlusion apply only to the officer who makes a sensor measurement. A receiving officer still has to face an incoming live track, but is not range-limited. When direct reports stop, a track coasts on predicted motion for a short confidence window before removal instead of becoming a permanent last-known-position marker.
 
 ## Sensor-ready architecture
 
-The UI does not read target positions directly for its shared-vision display. It consumes this pipeline:
+The UI does not read target positions directly for its shared-vision display. Detection runs through a head-mounted stereo camera on every officer, and the UI consumes the result of that pipeline:
 
 ```text
-pose provider + camera / RealSense / LiDAR detection providers
+officer head pose → stereo rig projection (src/stereo.js)
                          ↓
- timestamp-normalized SensorDetection reports
+   disparity → triangulated position + per-report σ
                          ↓
-         SensorFusion → TrackStore
+        StereoDetection reports (src/vision.js)
                          ↓
-       direct contacts + shared 3D outlines
+    MotionTracker — constant-velocity Kalman (src/tracking.js)
+                         ↓
+  direct contacts + shared 3D outlines + live movement marking
 ```
+
+[The stereo vision guide](VISION.md) covers the optics, the detection gates, why depth error grows with the square of range, and how movement is tracked and drawn. `src/sensors.js` remains the hardware-neutral provider contract that a real camera driver plugs into.
 
 `src/sensors.js` defines the current contract. Every provider emits timestamped `officerId`, `trackId`, 3D `position`, `confidence`, optional `velocity`, and optional `outline`. The simulated camera provider emits this exact shape now. Future hardware should implement `read(timestamp)` and pass reports to `SensorFusion.update`; it should not update the renderer or shared-vision policy directly.
 
@@ -44,7 +50,7 @@ Pose data contains officer ID, timestamp, 3D position, and orientation. Future c
 
 ## Scope and limits
 
-This phase does not connect real cameras, RealSense units, LiDAR, networking, calibration UI, trained terrorist-detection models, identity recognition, or body tracking. Simulated providers stand in for those live sources. This is a development harness, not a validated safety, detection, or operational system.
+This phase models stereo optics and geometry, not real imagery: it does not connect physical cameras, RealSense units, LiDAR, networking, calibration or rectification UI, trained terrorist-detection models, identity recognition, or body tracking. Simulated providers stand in for those live sources. This is a development harness, not a validated safety, detection, or operational system.
 
 ## Development checks
 
