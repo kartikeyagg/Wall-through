@@ -82,6 +82,7 @@ function correctAxis(axis, measurement, sigma) {
 
 export class MotionTracker {
   constructor(options = {}) {
+    if (!options || typeof options !== "object") options = {};
     for (const [key, value] of Object.entries(DEFAULTS)) this[key] = finite(options[key]) ? options[key] : value;
     this.trailLength = Math.max(0, Math.floor(this.trailLength));
     this.tracks = new Map();
@@ -108,6 +109,7 @@ export class MotionTracker {
         for (const axis of AXES) correctAxis(track.axes[axis], fused.position[axis], sigma);
         track.timestamp = fused.timestamp;
         track.confidence = fused.confidence;
+        track.baseConfidence = fused.confidence;
         track.outline = fused.outline;
         track.observers = [...new Set(reports.map((report) => report.officerId).filter((id) => id != null))].sort();
         track.missedMs = 0;
@@ -116,7 +118,7 @@ export class MotionTracker {
       } else {
         track.missedMs += elapsed;
         track.coasting = true;
-        track.confidence *= Math.max(0, 1 - elapsed / this.staleAfterMs);
+        track.confidence = track.baseConfidence * Math.max(0, 1 - track.missedMs / this.staleAfterMs);
       }
       this.derive(track, timestamp);
     }
@@ -131,6 +133,7 @@ export class MotionTracker {
         lastUpdate: timestamp,
         timestamp: fused.timestamp,
         confidence: fused.confidence,
+        baseConfidence: fused.confidence,
         outline: fused.outline,
         observers: [...new Set(reports.map((report) => report.officerId).filter((id) => id != null))].sort(),
         missedMs: 0,

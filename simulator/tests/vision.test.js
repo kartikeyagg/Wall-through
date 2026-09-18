@@ -33,9 +33,10 @@ test("a plainly faced target produces exactly the declared stereo detection fiel
 
 test("a real world wall occludes stereo detection", () => {
   const world = createWorld();
-  const from = world.officers[0];
+  const from = world.officers[3];
   const to = world.targets[0];
-  world.walls = [world.walls[1]];
+  from.angle = Math.atan2(to.y - from.y, to.x - from.x);
+  world.walls = [world.walls[0]];
   assert.equal(occluded(from, to, world.walls), true);
   assert.deepEqual(detect(world, { noise: false }).filter((item) => item.officerId === from.id && item.trackId === to.id), []);
 });
@@ -82,6 +83,8 @@ test("successive patrol frames produce a moving track", () => {
   world.officers = [world.officers[0]];
   world.targets = [world.targets[0]];
   const pipeline = new StereoVisionPipeline({ noise: false, tracker: { movingSpeed: 1 } });
+  pipeline.update(world);
+  stepWorld(world, 1, { autoPatrol: true });
   pipeline.update(world);
   stepWorld(world, 1, { autoPatrol: true });
   const frame = pipeline.update(world);
