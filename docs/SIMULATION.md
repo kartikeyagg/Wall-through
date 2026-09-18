@@ -27,6 +27,10 @@ Each officer carries one sensor: the head-mounted stereo camera. Its two glass l
 | Space or Pause / Resume | Pause or resume movement, scanning, and sensor updates |
 | Start / Stop automatic rotation | Make every officer scan; stopping retains headings |
 | World overview / Officer glasses | Switch between third-person and first-person 3D views |
+| Ctrl + drag (overview) | Orbit the camera: left/right rotates around the arena, up/down tilts from near-ground to top-down |
+| Ctrl + scroll (overview) | Zoom the overview camera in and out |
+| Double-click (overview) | Reset the overview camera to its default angle and distance |
+| Ctrl + drag (glasses) | Turn the selected officer left/right; the view stays locked to their stereo rig |
 | Shared vision | Show/hide teammate-provided 3D target outlines |
 | Field of view / range | Adjust the stereo rig's horizontal FOV and operator range cutoff |
 | Stereo baseline | Set the lens separation on the head rig, 2–30 cm |
