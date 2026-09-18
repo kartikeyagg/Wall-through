@@ -119,6 +119,8 @@ const contacts = visibleTo(world, "P2", trackObservations(tracks, vision), true)
 | Camera range | Operator cutoff, applied on top of the optical limit |
 | Movement trails | Show each track's recent filtered path |
 | Velocity vectors | Show the heading arrow for moving targets |
+| Skeleton overlay | Draw the published 18-joint pose for each resolved subject |
+| Overlay opacity | Ceiling alpha for teammate-published skeletons |
 
 ## Scope
 
@@ -127,3 +129,8 @@ hardware-neutral provider contract and are still covered by tests. This phase
 models stereo *optics and geometry*; it does not run a trained person detector,
 stereo block matching on real imagery, calibration, or rectification. It is a
 development harness, not a validated detection system.
+
+Once a subject is resolved, the detecting officer publishes their body pose and
+teammates draw it as a translucent overlay. See
+[the skeleton overlay guide](SKELETON.md) for the keypoint model, the gait, and
+the seam that keeps a drawn skeleton out of detection.

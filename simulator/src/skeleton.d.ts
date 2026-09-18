@@ -66,7 +66,7 @@ export interface SkeletonOptions {
   height?: number;
   /** Distance covered per full gait cycle, in the caller's unit. Default 1.5 x height. */
   strideLength?: number;
-  /** Peak limb swing at a full stride, radians. Default 0.62. */
+  /** Peak limb swing at a full stride, radians. Default 0.4. */
   swing?: number;
   /** Idle breathing amplitude as a fraction of height. Default 0.004. */
   idleSway?: number;
