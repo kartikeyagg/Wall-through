@@ -45,6 +45,10 @@ const headRadius = 0.11;
 const eyeSpacing = 0.1; // drawn wider than life so the gaze reads from the overview camera
 const skeletonMinScore = 0.32;
 const overlayTintColor = new THREE.Color("#bcf574");
+// Overview orbit around the arena centre: Ctrl + drag rotates and tilts, Ctrl + wheel zooms, double-click resets.
+const defaultOrbit = { azimuth: Math.atan2(8.5, 11.5), elevation: Math.asin(12.5 / Math.hypot(8.5, 12.5, 11.5)), distance: Math.hypot(8.5, 12.5, 11.5) };
+const orbitLimits = { minElevation: THREE.MathUtils.degToRad(5), maxElevation: THREE.MathUtils.degToRad(89), minDistance: 5, maxDistance: 32 };
+const orbitRadiansPerPixel = 0.006;
 const point = (x: number, y: number, height = 0) => new THREE.Vector3((x - 500) * scale, height, (y - 340) * scale);
 
 type StereoRigVisual = { group: THREE.Group; lenses: [THREE.Mesh, THREE.Mesh] };
@@ -184,8 +188,8 @@ export default function SimulationScene({ world, options, contacts, overlays, on
     const element = host.current;
     if (!element) return;
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false }); renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); renderer.setClearColor("#101a20"); renderer.domElement.tabIndex = 0;
-    renderer.domElement.setAttribute("aria-label", "Interactive 3D simulation. Click an officer to select. Use W A S D or arrows to move, Q and E to turn, and Space to pause."); element.appendChild(renderer.domElement);
-    const scene = new THREE.Scene(); scene.fog = new THREE.Fog("#101a20", 12, 28);
+    renderer.domElement.setAttribute("aria-label", "Interactive 3D simulation. Click an officer to select. Use W A S D or arrows to move, Q and E to turn, and Space to pause. Hold Control and drag to rotate and tilt the view, Control and scroll to zoom, double-click to reset the view."); element.appendChild(renderer.domElement);
+    const scene = new THREE.Scene(), fog = new THREE.Fog("#101a20", 12, 28); scene.fog = fog;
     const camera = new THREE.PerspectiveCamera(48, 1, 0.1, 50); scene.add(new THREE.HemisphereLight("#b9dbed", "#091016", 2.1));
     const light = new THREE.DirectionalLight("#d9f5ff", 2.5); light.position.set(5, 10, 3); scene.add(light);
     const ground = new THREE.Mesh(new THREE.PlaneGeometry(20, 13.6), new THREE.MeshStandardMaterial({ color: "#14232b", roughness: 0.95 })); ground.rotation.x = -Math.PI / 2; scene.add(ground);
@@ -209,10 +213,25 @@ export default function SimulationScene({ world, options, contacts, overlays, on
       lastWorld = w;
     };
     const resize = () => { const { width, height } = element.getBoundingClientRect(); renderer.setSize(Math.max(width, 1), Math.max(height, 1), false); camera.aspect = Math.max(width, 1) / Math.max(height, 1); camera.updateProjectionMatrix(); };
-    const select = (event: PointerEvent) => { renderer.domElement.focus(); const bounds = renderer.domElement.getBoundingClientRect(); pointer.set(((event.clientX - bounds.left) / bounds.width) * 2 - 1, -((event.clientY - bounds.top) / bounds.height) * 2 + 1); raycaster.setFromCamera(pointer, camera); const officerOf = (object: THREE.Object3D | null): string | undefined => object ? object.userData.officerId ?? officerOf(object.parent) : undefined; const id = raycaster.intersectObjects([...people.values()], true).map((item) => officerOf(item.object)).find(Boolean); if (id) onSelect(id); };
+    const orbit = { ...defaultOrbit }; let drag: { x: number; y: number } | null = null;
+    const startDrag = (event: PointerEvent) => { drag = { x: event.clientX, y: event.clientY }; renderer.domElement.setPointerCapture(event.pointerId); renderer.domElement.style.cursor = "grabbing"; };
+    const moveDrag = (event: PointerEvent) => {
+      if (!drag) return;
+      const dx = event.clientX - drag.x, dy = event.clientY - drag.y; drag = { x: event.clientX, y: event.clientY };
+      if (options.current.mode === "glasses") {
+        // First person has no free camera: the view is the rig, so dragging turns the officer (and their sensor) instead.
+        const officer = world.current?.officers.find((item) => item.id === options.current.selected); if (officer) officer.angle = Math.atan2(Math.sin(officer.angle + dx * orbitRadiansPerPixel), Math.cos(officer.angle + dx * orbitRadiansPerPixel));
+        return;
+      }
+      orbit.azimuth -= dx * orbitRadiansPerPixel; orbit.elevation = THREE.MathUtils.clamp(orbit.elevation + dy * orbitRadiansPerPixel, orbitLimits.minElevation, orbitLimits.maxElevation);
+    };
+    const endDrag = (event: PointerEvent) => { if (!drag) return; drag = null; if (renderer.domElement.hasPointerCapture(event.pointerId)) renderer.domElement.releasePointerCapture(event.pointerId); renderer.domElement.style.cursor = ""; };
+    const zoom = (event: WheelEvent) => { if (!event.ctrlKey || options.current.mode !== "overview") return; event.preventDefault(); orbit.distance = THREE.MathUtils.clamp(orbit.distance * Math.exp(event.deltaY * 0.0015), orbitLimits.minDistance, orbitLimits.maxDistance); };
+    const resetView = () => Object.assign(orbit, defaultOrbit);
+    const select = (event: PointerEvent) => { renderer.domElement.focus(); if (event.ctrlKey) { startDrag(event); return; } const bounds = renderer.domElement.getBoundingClientRect(); pointer.set(((event.clientX - bounds.left) / bounds.width) * 2 - 1, -((event.clientY - bounds.top) / bounds.height) * 2 + 1); raycaster.setFromCamera(pointer, camera); const officerOf = (object: THREE.Object3D | null): string | undefined => object ? object.userData.officerId ?? officerOf(object.parent) : undefined; const id = raycaster.intersectObjects([...people.values()], true).map((item) => officerOf(item.object)).find(Boolean); if (id) onSelect(id); };
     const keyDown = (event: KeyboardEvent) => { const key = event.key.toLowerCase(); if (["w", "a", "s", "d", "q", "e", "arrowup", "arrowdown", "arrowleft", "arrowright", " "].includes(key)) { event.preventDefault(); onKeyDown(key, event.repeat); } };
     const keyUp = (event: KeyboardEvent) => onKeyUp(event.key.toLowerCase());
-    const observer = new ResizeObserver(resize); observer.observe(element); renderer.domElement.addEventListener("pointerdown", select); renderer.domElement.addEventListener("keydown", keyDown); window.addEventListener("keyup", keyUp); window.addEventListener("blur", onClearKeys); document.addEventListener("visibilitychange", onClearKeys); resize();
+    const observer = new ResizeObserver(resize); observer.observe(element); renderer.domElement.addEventListener("pointerdown", select); renderer.domElement.addEventListener("pointermove", moveDrag); renderer.domElement.addEventListener("pointerup", endDrag); renderer.domElement.addEventListener("pointercancel", endDrag); renderer.domElement.addEventListener("wheel", zoom, { passive: false }); renderer.domElement.addEventListener("dblclick", resetView); renderer.domElement.addEventListener("keydown", keyDown); window.addEventListener("keyup", keyUp); window.addEventListener("blur", onClearKeys); document.addEventListener("visibilitychange", onClearKeys); resize();
     let frame = 0, pulse = 0;
     const render = () => {
       const w = world.current, settings = options.current;
@@ -249,12 +268,17 @@ export default function SimulationScene({ world, options, contacts, overlays, on
           const dx = Math.cos(selected.angle), dy = Math.sin(selected.angle), eyeX = selected.x + dx * headRadius / scale, eyeY = selected.y + dy * headRadius / scale;
           camera.position.copy(point(eyeX, eyeY, eyeHeight)); camera.lookAt(point(eyeX + dx * 100, eyeY + dy * 100, eyeHeight));
           camera.fov = Math.min(170, THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(settings.fov) / 2) / camera.aspect))); camera.updateProjectionMatrix();
-        } else { camera.fov = 48; camera.position.set(8.5, 12.5, 11.5); camera.lookAt(0, 0, 0); camera.updateProjectionMatrix(); }
+          fog.near = 12; fog.far = 28;
+        } else {
+          const ground = orbit.distance * Math.cos(orbit.elevation); camera.fov = 48; camera.position.set(ground * Math.sin(orbit.azimuth), orbit.distance * Math.sin(orbit.elevation), ground * Math.cos(orbit.azimuth)); camera.lookAt(0, 0, 0); camera.updateProjectionMatrix();
+          // Fog tracks the orbit distance so zooming out does not bury the arena.
+          fog.near = orbit.distance - 7; fog.far = orbit.distance + 17;
+        }
       }
       renderer.render(scene, camera); frame = requestAnimationFrame(render);
     };
     frame = requestAnimationFrame(render);
-    return () => { cancelAnimationFrame(frame); observer.disconnect(); renderer.domElement.removeEventListener("pointerdown", select); renderer.domElement.removeEventListener("keydown", keyDown); window.removeEventListener("keyup", keyUp); window.removeEventListener("blur", onClearKeys); document.removeEventListener("visibilitychange", onClearKeys); disposeObject(scene); renderer.dispose(); element.replaceChildren(); };
+    return () => { cancelAnimationFrame(frame); observer.disconnect(); renderer.domElement.removeEventListener("pointerdown", select); renderer.domElement.removeEventListener("pointermove", moveDrag); renderer.domElement.removeEventListener("pointerup", endDrag); renderer.domElement.removeEventListener("pointercancel", endDrag); renderer.domElement.removeEventListener("wheel", zoom); renderer.domElement.removeEventListener("dblclick", resetView); renderer.domElement.removeEventListener("keydown", keyDown); window.removeEventListener("keyup", keyUp); window.removeEventListener("blur", onClearKeys); document.removeEventListener("visibilitychange", onClearKeys); disposeObject(scene); renderer.dispose(); element.replaceChildren(); };
   }, [contacts, onClearKeys, onKeyDown, onKeyUp, onSelect, options, overlays, world]);
   return <div className="three-canvas" ref={host} />;
 }
