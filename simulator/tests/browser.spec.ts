@@ -51,6 +51,40 @@ test("3D controls retain movement, scanning, reset and team sizing", async ({ pa
   await expect(page.locator(".map-state")).toContainText("PAUSED");
 });
 
+test("stereo rig telemetry reacts to the baseline and range controls", async ({ page }) => {
+  await pausedScene(page);
+  const readout = page.locator(".vision-readout");
+  await expect(readout).toContainText("BASELINE");
+  await expect(readout).toContainText("DISPARITY");
+  await expect(readout).toContainText("DEPTH σ");
+  const baseline = page.getByRole("slider", { name: "Stereo baseline" });
+  await expect(readout.locator("div", { hasText: "BASELINE" }).first()).toContainText("8.0");
+  await baseline.fill("24");
+  await expect(readout.locator("div", { hasText: "BASELINE" }).first()).toContainText("24.0");
+  // A wider baseline triangulates further, so the reported reach must not shrink.
+  const reach = async () => Number((await readout.locator("div", { hasText: "REACH" }).first().innerText()).replace(/[^\d.]/g, ""));
+  const wide = await reach();
+  await page.getByRole("slider", { name: "Camera range" }).fill("150");
+  await expect.poll(reach).toBeLessThan(wide);
+});
+
+test("movement marking exposes live speed, heading and motion toggles", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("canvas")).toBeVisible();
+  await page.getByRole("switch", { name: "Shared vision" }).check();
+  const motion = page.locator(".contact .motion").first();
+  await expect(motion).toBeVisible();
+  await expect(motion).toContainText("m/s");
+  await expect(motion).toContainText("°");
+  for (const label of ["Movement trails", "Velocity vectors"]) {
+    const toggle = page.getByRole("checkbox", { name: label });
+    await expect(toggle).toBeChecked();
+    await toggle.uncheck();
+    await expect(toggle).not.toBeChecked();
+    await toggle.check();
+  }
+});
+
 test("responsive 3D canvas remains inside the viewport", async ({ page }) => {
   await pausedScene(page);
   for (const width of [375, 760, 1024, 1440]) {
