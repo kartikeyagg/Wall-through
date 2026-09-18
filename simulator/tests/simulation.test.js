@@ -8,6 +8,7 @@ import {
   canSee,
   observe,
   visibleTo,
+  awareOf,
   segmentBlocked,
   moveAgent,
 } from "../src/simulation.js";
@@ -341,4 +342,27 @@ test("sensor fusion keeps a live, confidence-weighted track and expires stale lo
   const observations = tracksToObservations(tracks, { range: 420, fov: 2 });
   assert.equal(observations[0].targetId, "T9");
   assert.deepEqual(store.ingest([], 151), []);
+});
+
+test("awareness keeps tracks behind the officer that the view filter drops", () => {
+  const world = createWorld();
+  const snapshot = observe(world);
+  const officer = world.officers.find((item) => item.id === "P2");
+  officer.angle += Math.PI;
+  assert.equal(
+    visibleTo(world, "P2", snapshot).some((item) => item.targetId === "T1"),
+    false,
+  );
+  assert.equal(
+    awareOf(world, "P2", snapshot).find((item) => item.targetId === "T1")
+      ?.kind,
+    "shared",
+  );
+  assert.equal(
+    awareOf(world, "P2", snapshot, false).some(
+      (item) => item.targetId === "T1",
+    ),
+    false,
+  );
+  assert.deepEqual(awareOf(world, "nobody", snapshot), []);
 });

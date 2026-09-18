@@ -126,3 +126,18 @@ test("the skeleton overlay toggle stops layers reaching the receiving officer", 
   await expect(received).not.toHaveText("0");
   expect(errors).toEqual([]);
 });
+
+test("direction arrows toggle in the officer glasses view", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await pausedScene(page);
+  await page.getByRole("button", { name: "Officer glasses", exact: true }).click();
+  await expect(page.locator(".contacts")).toContainText("T1");
+  const arrows = page.getByRole("checkbox", { name: "Direction arrows" });
+  await expect(arrows).toBeChecked();
+  await page.locator(".three-canvas").screenshot({ path: test.info().outputPath("glasses-arrows.png") });
+  await arrows.uncheck();
+  await expect(arrows).not.toBeChecked();
+  await page.locator(".three-canvas").screenshot({ path: test.info().outputPath("glasses-no-arrows.png") });
+  expect(errors).toEqual([]);
+});

@@ -21,6 +21,7 @@ export type SceneOptions = {
   overlayOpacity: number;
   trails: boolean;
   vectors: boolean;
+  directionArrows: boolean;
   baseline: number;
   range: number;
   fov: number;
@@ -30,6 +31,8 @@ type Props = {
   world: React.MutableRefObject<World | null>;
   options: React.MutableRefObject<SceneOptions>;
   contacts: React.MutableRefObject<VisionContact[]>;
+  /** Every live track the selected officer knows about, in any direction; drives the glasses HUD arrows. */
+  awareness: React.MutableRefObject<VisionContact[]>;
   overlays: React.MutableRefObject<OverlayLayer[]>;
   onSelect: (id: string) => void;
   onKeyDown: (key: string, repeated: boolean) => void;
@@ -49,6 +52,8 @@ const overlayTintColor = new THREE.Color("#bcf574");
 const defaultOrbit = { azimuth: Math.atan2(8.5, 11.5), elevation: Math.asin(12.5 / Math.hypot(8.5, 12.5, 11.5)), distance: Math.hypot(8.5, 12.5, 11.5) };
 const orbitLimits = { minElevation: THREE.MathUtils.degToRad(5), maxElevation: THREE.MathUtils.degToRad(89), minDistance: 5, maxDistance: 32 };
 const orbitRadiansPerPixel = 0.006;
+// Glasses HUD: one arrow per live contact on a ring around the view centre, pointing at the target's bearing — up is ahead, down is behind.
+const hudDepth = 1, hudRingFraction = 0.62, hudArrowFraction = 0.1;
 const point = (x: number, y: number, height = 0) => new THREE.Vector3((x - 500) * scale, height, (y - 340) * scale);
 
 type StereoRigVisual = { group: THREE.Group; lenses: [THREE.Mesh, THREE.Mesh] };
@@ -56,6 +61,7 @@ type OfficerVisual = { body: THREE.Mesh; head: THREE.Group; rig: StereoRigVisual
 type FieldVisual = { group: THREE.Group; left: THREE.Mesh; right: THREE.Mesh; overlap: THREE.Line };
 type ContactVisual = { arrow: THREE.LineSegments; arrowMaterial: THREE.LineBasicMaterial; trail: THREE.Line; trailPosition: THREE.BufferAttribute; trailColor: THREE.BufferAttribute; ring: THREE.LineLoop; ringMaterial: THREE.LineBasicMaterial; outline: THREE.LineSegments; outlineMaterial: THREE.LineBasicMaterial };
 type LinkVisual = { line: THREE.Line; position: THREE.BufferAttribute; distance: THREE.BufferAttribute };
+type DirectionArrowVisual = { arrow: THREE.Mesh; material: THREE.MeshBasicMaterial };
 type SkeletonVisual = { bones: THREE.LineSegments; bonesMaterial: THREE.LineBasicMaterial; bonesPosition: THREE.BufferAttribute; bonesColor: THREE.BufferAttribute; joints: THREE.Points; jointsMaterial: THREE.PointsMaterial; jointsPosition: THREE.BufferAttribute; jointsColor: THREE.BufferAttribute; tint: number; color: THREE.Color };
 
 /** Glass lenses sit directly over the eyes: the camera sees exactly what the officer sees. */
@@ -161,6 +167,14 @@ function makeContactVisual(): ContactVisual {
   return { arrow, arrowMaterial, trail, trailPosition, trailColor, ring, ringMaterial, outline, outlineMaterial };
 }
 
+/** A filled chevron pointing along +y, unit length; drawn on the skeleton layer so walls never hide it. */
+function makeDirectionArrow(): DirectionArrowVisual {
+  const shape = new THREE.Shape(); shape.moveTo(0, 0.5); shape.lineTo(0.42, -0.5); shape.lineTo(0, -0.22); shape.lineTo(-0.42, -0.5); shape.lineTo(0, 0.5);
+  const material = new THREE.MeshBasicMaterial({ color: "#ffd479", transparent: true, depthTest: false, depthWrite: false, fog: false, side: THREE.DoubleSide }), arrow = new THREE.Mesh(new THREE.ShapeGeometry(shape), material);
+  arrow.renderOrder = 1000; arrow.visible = false; arrow.frustumCulled = false;
+  return { arrow, material };
+}
+
 function makeSkeletonVisual(tint = 0): SkeletonVisual {
   const bonesGeometry = new THREE.BufferGeometry(), bonesPosition = new THREE.BufferAttribute(new Float32Array(BONES.length * 2 * 3), 3), bonesColor = new THREE.BufferAttribute(new Float32Array(BONES.length * 2 * 3), 3);
   bonesGeometry.setAttribute("position", bonesPosition); bonesGeometry.setAttribute("color", bonesColor);
@@ -182,7 +196,7 @@ function disposeObject(object: THREE.Object3D) {
   object.traverse((child) => { const mesh = child as THREE.Mesh; mesh.geometry?.dispose(); const material = mesh.material; if (Array.isArray(material)) material.forEach((item) => item.dispose()); else material?.dispose(); });
 }
 
-export default function SimulationScene({ world, options, contacts, overlays, onSelect, onKeyDown, onKeyUp, onClearKeys }: Props) {
+export default function SimulationScene({ world, options, contacts, awareness, overlays, onSelect, onKeyDown, onKeyUp, onClearKeys }: Props) {
   const host = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const element = host.current;
@@ -194,18 +208,21 @@ export default function SimulationScene({ world, options, contacts, overlays, on
     const light = new THREE.DirectionalLight("#d9f5ff", 2.5); light.position.set(5, 10, 3); scene.add(light);
     const ground = new THREE.Mesh(new THREE.PlaneGeometry(20, 13.6), new THREE.MeshStandardMaterial({ color: "#14232b", roughness: 0.95 })); ground.rotation.x = -Math.PI / 2; scene.add(ground);
     const grid = new THREE.GridHelper(20, 25, "#293a43", "#1b2a32"); grid.position.y = 0.005; scene.add(grid);
-    const people = new Map<string, THREE.Group>(), officerVisuals = new Map<string, OfficerVisual>(), gazeGroup = new THREE.Group(), fields = new Map<string, FieldVisual>(), contactVisuals = new Map<string, ContactVisual>(), directSkeletonVisuals = new Map<string, SkeletonVisual>(), overlaySkeletonVisuals = new Map<string, SkeletonVisual>(), freeOverlaySkeletonVisuals: SkeletonVisual[] = [], linkVisuals = new Map<string, LinkVisual>();
+    const people = new Map<string, THREE.Group>(), officerVisuals = new Map<string, OfficerVisual>(), gazeGroup = new THREE.Group(), fields = new Map<string, FieldVisual>(), contactVisuals = new Map<string, ContactVisual>(), directSkeletonVisuals = new Map<string, SkeletonVisual>(), overlaySkeletonVisuals = new Map<string, SkeletonVisual>(), freeOverlaySkeletonVisuals: SkeletonVisual[] = [], linkVisuals = new Map<string, LinkVisual>(), directionArrows = new Map<string, DirectionArrowVisual>();
     const linkGroup = new THREE.Group(), fovGroup = new THREE.Group(), wallGroup = new THREE.Group(), contactGroup = new THREE.Group(), skeletonGroup = new THREE.Group(); scene.add(linkGroup, fovGroup, wallGroup, contactGroup, skeletonGroup, gazeGroup);
+    // The HUD rides on the camera, so it must be in the scene graph for its children to render.
+    const hudGroup = new THREE.Group(); hudGroup.position.z = -hudDepth; camera.add(hudGroup); scene.add(camera);
     const raycaster = new THREE.Raycaster(), pointer = new THREE.Vector2(); let lastWorld: World | null = null;
     const clearGroup = (group: THREE.Group) => { for (const child of [...group.children]) { group.remove(child); disposeObject(child); } };
     const rebuild = (w: World) => {
       for (const person of people.values()) { scene.remove(person); disposeObject(person); }
-      clearGroup(fovGroup); clearGroup(wallGroup); clearGroup(contactGroup); clearGroup(linkGroup); clearGroup(skeletonGroup); clearGroup(gazeGroup); people.clear(); officerVisuals.clear(); fields.clear(); contactVisuals.clear(); directSkeletonVisuals.clear(); overlaySkeletonVisuals.clear(); freeOverlaySkeletonVisuals.length = 0; linkVisuals.clear();
+      clearGroup(fovGroup); clearGroup(wallGroup); clearGroup(contactGroup); clearGroup(linkGroup); clearGroup(skeletonGroup); clearGroup(gazeGroup); clearGroup(hudGroup); people.clear(); officerVisuals.clear(); fields.clear(); contactVisuals.clear(); directSkeletonVisuals.clear(); overlaySkeletonVisuals.clear(); freeOverlaySkeletonVisuals.length = 0; linkVisuals.clear(); directionArrows.clear();
       for (const wall of w.walls) { const mesh = new THREE.Mesh(new THREE.BoxGeometry(wall.w * scale, 2.2, wall.h * scale), new THREE.MeshStandardMaterial({ color: "#35434d", roughness: 0.72 })); mesh.position.copy(point(wall.x + wall.w / 2, wall.y + wall.h / 2, 1.1)); wallGroup.add(mesh); }
       for (const officer of w.officers) { const { group: person, visual } = makeOfficer("#76baff"); person.userData.officerId = officer.id; people.set(officer.id, person); officerVisuals.set(officer.id, visual); scene.add(person); gazeGroup.add(visual.gaze, visual.gazePoint); const field = makeField(options.current.range, options.current.fov); fields.set(officer.id, field); fovGroup.add(field.group); }
       for (const target of w.targets) {
         const person = makePerson("#ff8b79"); people.set(target.id, person); scene.add(person);
         const visual = makeContactVisual(); contactVisuals.set(target.id, visual); contactGroup.add(visual.arrow, visual.trail, visual.ring, visual.outline);
+        const direction = makeDirectionArrow(); directionArrows.set(target.id, direction); hudGroup.add(direction.arrow);
         const skeletonVisual = makeSkeletonVisual(); directSkeletonVisuals.set(target.id, skeletonVisual); skeletonGroup.add(skeletonVisual.bones, skeletonVisual.joints);
         const geometry = new THREE.BufferGeometry(), position = new THREE.BufferAttribute(new Float32Array(6), 3), distance = new THREE.BufferAttribute(new Float32Array(2), 1); geometry.setAttribute("position", position); geometry.setAttribute("lineDistance", distance);
         const line = new THREE.Line(geometry, new THREE.LineDashedMaterial({ color: "#bcf574", dashSize: 0.12, gapSize: 0.12, transparent: true, opacity: 0.65 })); line.visible = false; linkGroup.add(line); linkVisuals.set(target.id, { line, position, distance });
@@ -247,11 +264,20 @@ export default function SimulationScene({ world, options, contacts, overlays, on
           visual.gazePosition.setXYZ(0, from.x, from.y, from.z); visual.gazePosition.setXYZ(1, to.x, to.y, to.z); visual.gazePosition.needsUpdate = true; visual.gazeMaterial.color.set(tone); visual.gazeMaterial.opacity = isSelected ? 0.9 : 0.55; (visual.gazePoint.material as THREE.MeshBasicMaterial).color.set(tone); visual.gazePoint.position.copy(to); visual.gaze.visible = !firstPerson; visual.gazePoint.visible = true;
           const field = fields.get(officer.id)!, showField = settings.cones && (settings.mode === "overview" || isSelected); field.group.position.copy(point(eyeX, eyeY)); field.group.rotation.y = Math.PI / 2 - officer.angle; field.left.visible = showField; field.right.visible = showField; field.overlap.visible = showField; ((field.overlap.material as THREE.LineBasicMaterial)).color.set(tone); field.left.position.x = -separation / 2; field.right.position.x = separation / 2; field.overlap.position.z = Math.max(0.045, separation);
         }
-        const live = new Map(contacts.current.map((item) => [item.targetId, item]));
+        const live = new Map(contacts.current.map((item) => [item.targetId, item])), known = new Map(awareness.current.map((item) => [item.targetId, item]));
         for (const target of w.targets) {
           const mesh = people.get(target.id)!, contact = live.get(target.id), visual = contactVisuals.get(target.id)!; mesh.visible = settings.mode === "overview" || Boolean(contact); mesh.position.copy(point(target.x, target.y)); mesh.rotation.y = Math.PI / 2 - target.angle; ((mesh.children[0] as THREE.Mesh).material as THREE.MeshStandardMaterial).opacity = contact?.coasting ? 0.42 : 1;
+          const direction = directionArrows.get(target.id)!; direction.arrow.visible = false;
           const skeletonVisual = directSkeletonVisuals.get(target.id)!; skeletonVisual.bones.visible = false; skeletonVisual.joints.visible = false;
           visual.arrow.visible = Boolean(contact?.moving && settings.vectors); visual.trail.visible = Boolean(contact && settings.trails); visual.ring.visible = Boolean(contact); visual.outline.visible = contact?.kind === "shared"; const link = linkVisuals.get(target.id)!; link.line.visible = false;
+          const tracked = known.get(target.id);
+          if (tracked && settings.directionArrows && settings.mode === "glasses") {
+            // Bearing in the officer's own frame: +forward is up the screen, +right (increasing map angle) is right, behind wraps to the bottom.
+            const ox = tracked.x - selected.x, oy = tracked.y - selected.y, forward = ox * Math.cos(selected.angle) + oy * Math.sin(selected.angle), right = -ox * Math.sin(selected.angle) + oy * Math.cos(selected.angle), bearing = Math.atan2(right, forward);
+            const halfHeight = Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) * hudDepth, radius = hudRingFraction * Math.min(halfHeight, halfHeight * camera.aspect), closeness = THREE.MathUtils.clamp(1 - Math.hypot(ox, oy) / Math.max(settings.range, 1), 0.35, 1);
+            direction.arrow.position.set(Math.sin(bearing) * radius, Math.cos(bearing) * radius, 0); direction.arrow.rotation.z = -bearing; direction.arrow.scale.setScalar(halfHeight * hudArrowFraction * (0.7 + 0.6 * closeness));
+            direction.material.color.set(tracked.kind === "shared" ? "#bcf574" : "#ffd479"); direction.material.opacity = tracked.coasting ? 0.3 + (Math.sin(pulse) + 1) * 0.15 : 0.92; direction.arrow.visible = true;
+          }
           if (!contact) continue;
           const contactPoint = point(contact.x, contact.y), shared = contact.kind === "shared", uncertain = contact.coasting; visual.arrow.position.copy(contactPoint); visual.arrow.position.y = 0.055; visual.arrow.rotation.y = Math.PI / 2 - contact.heading; visual.arrow.scale.setScalar(THREE.MathUtils.clamp(contact.speed * scale * 1.4, 0.14, 0.85)); visual.arrowMaterial.color.set(shared ? "#bcf574" : "#ffd479"); visual.arrowMaterial.opacity = uncertain ? 0.42 : 0.9;
           const trail = contact.trail, count = Math.min(trail.length, 64), start = trail.length - count, base = shared ? [0.737, 0.961, 0.455] : [1, 0.831, 0.475];
@@ -279,6 +305,6 @@ export default function SimulationScene({ world, options, contacts, overlays, on
     };
     frame = requestAnimationFrame(render);
     return () => { cancelAnimationFrame(frame); observer.disconnect(); renderer.domElement.removeEventListener("pointerdown", select); renderer.domElement.removeEventListener("pointermove", moveDrag); renderer.domElement.removeEventListener("pointerup", endDrag); renderer.domElement.removeEventListener("pointercancel", endDrag); renderer.domElement.removeEventListener("wheel", zoom); renderer.domElement.removeEventListener("dblclick", resetView); renderer.domElement.removeEventListener("keydown", keyDown); window.removeEventListener("keyup", keyUp); window.removeEventListener("blur", onClearKeys); document.removeEventListener("visibilitychange", onClearKeys); disposeObject(scene); renderer.dispose(); element.replaceChildren(); };
-  }, [contacts, onClearKeys, onKeyDown, onKeyUp, onSelect, options, overlays, world]);
+  }, [awareness, contacts, onClearKeys, onKeyDown, onKeyUp, onSelect, options, overlays, world]);
   return <div className="three-canvas" ref={host} />;
 }

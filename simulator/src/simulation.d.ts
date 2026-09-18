@@ -56,6 +56,13 @@ export function visibleTo<T extends Observation>(
   observations: T[],
   sharing?: boolean,
 ): Array<T & { kind: "direct" | "shared" }>;
+/** Every live track the officer knows about, regardless of their field of view. */
+export function awareOf<T extends Observation>(
+  world: World,
+  officerId: string,
+  observations: T[],
+  sharing?: boolean,
+): Array<T & { kind: "direct" | "shared" }>;
 export function canSee(
   observer: Point & { angle: number },
   target: Point,
