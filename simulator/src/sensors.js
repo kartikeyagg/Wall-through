@@ -9,6 +9,10 @@
  * @typedef {{ source: string, read: (timestamp?: number) => SensorDetection[] }} DetectionProvider
  */
 
+const wrapAngle = (angle) => Math.atan2(Math.sin(angle), Math.cos(angle));
+const blendAngle = (primary, secondary, secondaryWeight) =>
+  wrapAngle(primary + wrapAngle(secondary - primary) * secondaryWeight);
+
 export function toSensorPosition(agent, height = 1) {
   return { x: agent.x, y: height, z: agent.y };
 }
@@ -26,6 +30,74 @@ export function createSimulatedPoseProvider(world) {
       }));
     },
   };
+}
+
+/**
+ * Lightweight self-localization seam for a head rig. Stereo map features and
+ * compass heading form the primary pose; a deliberately imperfect IMU only
+ * smooths that pose between readings. It is deterministic so regression tests
+ * and demos remain repeatable.
+ */
+export class SelfLocalization {
+  constructor({ stereoPositionError = 0.7, compassError = 0.012, imuWeight = 0.14 } = {}) {
+    this.stereoPositionError = stereoPositionError;
+    this.compassError = compassError;
+    this.imuWeight = imuWeight;
+    this.states = new Map();
+  }
+
+  update(world, timestamp = world.time * 1000, { imuEnabled = true } = {}) {
+    return world.officers.map((officer, index) => {
+      const phase = timestamp / 1000 * 1.7 + index * 2.31;
+      // A fixed map of visual wall/corner features provides the stereo fix.
+      const stereo = {
+        x: officer.x + Math.sin(phase) * this.stereoPositionError,
+        y: 1.7,
+        z: officer.y + Math.cos(phase * 1.13) * this.stereoPositionError,
+      };
+      const compassYaw = wrapAngle(officer.angle + Math.sin(phase * 0.61) * this.compassError);
+      const previous = this.states.get(officer.id);
+      let position = stereo, yaw = compassYaw, imu = null;
+      if (imuEnabled && previous && timestamp > previous.timestamp) {
+        const dt = (timestamp - previous.timestamp) / 1000;
+        const drift = 1 + 0.035 * Math.sin(phase * 1.9);
+        // This is intentionally less accurate than the stereo/compass fix.
+        const velocity = {
+          x: (officer.x - previous.truth.x) / dt * drift + Math.sin(phase * 2.4) * 0.9,
+          z: (officer.y - previous.truth.y) / dt * drift + Math.cos(phase * 2.1) * 0.9,
+        };
+        const yawRate = wrapAngle(officer.angle - previous.truth.angle) / dt + Math.sin(phase) * 0.018;
+        imu = { velocity, yawRate };
+        const predicted = {
+          x: previous.position.x + velocity.x * dt,
+          y: 1.7,
+          z: previous.position.z + velocity.z * dt,
+        };
+        const predictedYaw = wrapAngle(previous.yaw + yawRate * dt);
+        // Correct from stereo + compass first, then blend in the integrated IMU.
+        position = {
+          x: stereo.x * (1 - this.imuWeight) + predicted.x * this.imuWeight,
+          y: 1.7,
+          z: stereo.z * (1 - this.imuWeight) + predicted.z * this.imuWeight,
+        };
+        yaw = blendAngle(compassYaw, predictedYaw, this.imuWeight);
+      }
+      const estimate = {
+        officerId: officer.id,
+        timestamp,
+        position,
+        orientation: { yaw, pitch: 0, roll: 0 },
+        sources: { stereo: true, compass: true, imu: imuEnabled },
+        ...(imu ? { imu } : {}),
+      };
+      this.states.set(officer.id, { timestamp, position, yaw, truth: { x: officer.x, y: officer.y, angle: officer.angle } });
+      return estimate;
+    });
+  }
+
+  reset() {
+    this.states.clear();
+  }
 }
 
 /** Fuse same-ID reports into a current, confidence-weighted live track. */

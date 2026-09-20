@@ -14,10 +14,32 @@ import {
 } from "../src/simulation.js";
 import {
   createSimulatedPoseProvider,
+  SelfLocalization,
   SensorFusion,
   TrackStore,
   tracksToObservations,
 } from "../src/sensors.js";
+
+test("self localization uses stereo and compass as the primary pose, with optional IMU integration", () => {
+  const world = createWorld(5);
+  const localizer = new SelfLocalization({ stereoPositionError: 0.7, compassError: 0.012, imuWeight: 0.14 });
+  const first = localizer.update(world, 1_000, { imuEnabled: true }).find((item) => item.officerId === "P1");
+  assert.equal(first.sources.stereo, true);
+  assert.equal(first.sources.compass, true);
+  assert.equal(first.sources.imu, true);
+  assert.equal(first.imu, undefined);
+
+  const officer = world.officers[0];
+  officer.x += 20; officer.y += 8; officer.angle += 0.3;
+  const fused = localizer.update(world, 1_100, { imuEnabled: true }).find((item) => item.officerId === "P1");
+  assert.ok(fused.imu);
+  assert.ok(Math.hypot(fused.position.x - officer.x, fused.position.z - officer.y) < 2);
+
+  const stereoCompassOnly = localizer.update(world, 1_200, { imuEnabled: false }).find((item) => item.officerId === "P1");
+  assert.equal(stereoCompassOnly.sources.imu, false);
+  assert.equal(stereoCompassOnly.imu, undefined);
+  assert.ok(Math.hypot(stereoCompassOnly.position.x - officer.x, stereoCompassOnly.position.z - officer.y) <= 1);
+});
 
 test("world contains 5–10 officers and exactly three targets", () => {
   for (const [requested, expected] of [
