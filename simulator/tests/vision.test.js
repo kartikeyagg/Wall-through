@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createWorld, stepWorld, visibleTo } from "../src/simulation.js";
+import { createWorld, recallSensor, stepWorld, throwSensor, visibleTo } from "../src/simulation.js";
 import {
   TARGET_HEIGHT_METRES,
   StereoVisionPipeline,
@@ -194,4 +194,79 @@ test("track observations attach the highest-confidence supplied skeleton only", 
   const observations = trackObservations(frame.tracks, { range: 420, fov: Math.PI }, [low, high]);
   assert.equal(observations[0].skeleton.phase, 2);
   assert.equal("skeleton" in trackObservations(frame.tracks, { range: 420, fov: Math.PI })[0], false);
+});
+
+/** Run the world and pipeline together, as the app does. */
+function fly(world, pipeline, frames, onFrame) {
+  let frame;
+  for (let step = 0; step < frames; step++) {
+    stepWorld(world, 1 / 60, { selectedId: "none" });
+    frame = pipeline.update(world, world.time * 1000);
+    onFrame?.(frame);
+  }
+  return frame;
+}
+
+test("a puck in flight is never localized, and a settled one is fixed by the cameras", () => {
+  const world = createWorld();
+  const pipeline = new StereoVisionPipeline({ rig: { baseline: 0.08 }, fov: 117 * Math.PI / 180, range: 420 });
+  const puck = throwSensor(world, "P1", { timestamp: 0 });
+  let airborneLocated = false;
+  fly(world, pipeline, 60, (frame) => {
+    const report = frame.sensors.find((item) => item.id === puck.id);
+    if (report.state === "flight" && (report.located || report.fixes > 0)) airborneLocated = true;
+  });
+  assert.equal(airborneLocated, false, "a tumbling puck must not be averaged into a fix");
+  const frame = fly(world, pipeline, 600);
+  const report = frame.sensors.find((item) => item.id === puck.id);
+  assert.equal(puck.state, "settled");
+  assert.ok(report.located, "settled and in view, the puck gets a fix");
+  assert.ok(report.fixes > 1 && report.observers.length > 0);
+  const error = Math.hypot(report.position.x - puck.x, report.position.y - puck.y);
+  assert.ok(error < 12, `estimate within 12 units, got ${error.toFixed(1)}`);
+  // An estimator that reports less error than it makes is worse than useless.
+  assert.ok(report.sigma > 0 && error < report.sigma * 5, "reported sigma is consistent with real error");
+});
+
+test("a located puck tracks a moving body through a wall and feeds the fused tracker", () => {
+  const world = createWorld();
+  const pipeline = new StereoVisionPipeline({ rig: { baseline: 0.08 }, fov: 117 * Math.PI / 180, range: 420 });
+  // T1 patrols the room beyond the long wall; P2 faces that wall and throws.
+  Object.assign(world.targets[0], { x: 300, y: 250, angle: 0.05 });
+  throwSensor(world, "P2", { timestamp: 0 });
+  let radarFrames = 0, fusedFrames = 0, throughWall = 0;
+  fly(world, pipeline, 900, (frame) => {
+    if (frame.radarTracks.length) radarFrames += 1;
+    if (frame.radarTracks.some((track) => track.wallsCrossed > 0)) throughWall += 1;
+    if (frame.tracks.some((track) => track.sources.includes("mmwave"))) fusedFrames += 1;
+  });
+  assert.ok(radarFrames > 100, `radar should hold the body for a good while, got ${radarFrames} frames`);
+  assert.ok(throughWall > 0, "at least some of those returns came through drywall");
+  assert.ok(fusedFrames > 100, `radar measurements should reach the shared tracker, got ${fusedFrames}`);
+});
+
+test("recalling a puck retires its estimate and its filter", () => {
+  const world = createWorld();
+  const pipeline = new StereoVisionPipeline({ rig: { baseline: 0.08 }, fov: 117 * Math.PI / 180, range: 420 });
+  const puck = throwSensor(world, "P1", { timestamp: 0 });
+  assert.ok(fly(world, pipeline, 600).sensors[0].located);
+  recallSensor(world, puck.id);
+  const frame = fly(world, pipeline, 30);
+  assert.deepEqual(frame.sensors, []);
+  assert.deepEqual(frame.radarTracks, []);
+  assert.equal(pipeline.localizer.estimateFor(puck.id), undefined);
+  // A puck thrown into the same id slot must start from nothing.
+  throwSensor(world, "P1", { timestamp: world.time * 1000 });
+  assert.equal(pipeline.update(world, world.time * 1000).sensors[0].fixes, 0);
+});
+
+test("observations carry the modality behind each track and their pucks' owners", () => {
+  const world = createWorld();
+  const pipeline = new StereoVisionPipeline({ rig: { baseline: 0.08 }, fov: 117 * Math.PI / 180, range: 420 });
+  throwSensor(world, "P2", { timestamp: 0 });
+  const frame = fly(world, pipeline, 600);
+  const observations = trackObservations(frame.tracks, { range: 420, fov: 2 }, frame.skeletons, frame.sensors);
+  assert.ok(observations.every((item) => Array.isArray(item.sources) && item.stereo === item.sources.includes("stereo")));
+  assert.ok(observations.every((item) => item.radar === item.sources.includes("mmwave")));
+  assert.deepEqual(observations.sensors, [{ id: "M1", ownerId: "P2" }]);
 });
