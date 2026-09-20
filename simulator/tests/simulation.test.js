@@ -6,11 +6,15 @@ import {
   createWorld,
   stepWorld,
   canSee,
+  visibleLandmarks,
   observe,
   visibleTo,
   awareOf,
   segmentBlocked,
   moveAgent,
+  throwSensor,
+  recallSensor,
+  MAX_SENSORS,
 } from "../src/simulation.js";
 import {
   createSimulatedPoseProvider,
@@ -302,6 +306,265 @@ test("patrol remains deterministic and collision-free over a long run", () => {
   assert.ok(Math.abs(world.time - 40) < 1e-8);
 });
 
+const clearOfWalls = (agent, walls) => walls.every((wall) => {
+  const x = Math.max(wall.x, Math.min(wall.x + wall.w, agent.x));
+  const y = Math.max(wall.y, Math.min(wall.y + wall.h, agent.y));
+  return Math.hypot(agent.x - x, agent.y - y) >= agent.radius - 1e-7;
+});
+
+test("landmarks are deterministic static scenery with valid placement", () => {
+  const first = createWorld(5);
+  const second = createWorld(10);
+  assert.deepEqual(first.landmarks, second.landmarks);
+  assert.ok(first.landmarks.length >= 20 && first.landmarks.length <= 40);
+  assert.equal(new Set(first.landmarks.map((item) => item.id)).size, first.landmarks.length);
+  first.landmarks.forEach((landmark) => {
+    assert.ok(landmark.x >= 0 && landmark.x <= WIDTH);
+    assert.ok(landmark.y >= 0 && landmark.y <= HEIGHT);
+    assert.ok(landmark.strength >= 0 && landmark.strength <= 1);
+    const floor = landmark.kind === "floor-marking";
+    assert.equal(floor, landmark.normal.x === 0 && landmark.normal.y === 0);
+    if (floor) {
+      assert.equal(landmark.height, 0);
+      assert.equal(first.walls.some((wall) =>
+        landmark.x > wall.x && landmark.x < wall.x + wall.w &&
+        landmark.y > wall.y && landmark.y < wall.y + wall.h), false);
+      return;
+    }
+    near(Math.hypot(landmark.normal.x, landmark.normal.y), 1);
+    assert.ok(first.walls.some((wall) =>
+      (Math.abs(landmark.x - wall.x) < 1e-9 && landmark.normal.x === -1 &&
+        landmark.y >= wall.y && landmark.y <= wall.y + wall.h) ||
+      (Math.abs(landmark.x - (wall.x + wall.w)) < 1e-9 && landmark.normal.x === 1 &&
+        landmark.y >= wall.y && landmark.y <= wall.y + wall.h) ||
+      (Math.abs(landmark.y - wall.y) < 1e-9 && landmark.normal.y === -1 &&
+        landmark.x >= wall.x && landmark.x <= wall.x + wall.w) ||
+      (Math.abs(landmark.y - (wall.y + wall.h)) < 1e-9 && landmark.normal.y === 1 &&
+        landmark.x >= wall.x && landmark.x <= wall.x + wall.w)));
+  });
+});
+
+test("visible landmarks respect range, view, occlusion, and wall face direction", () => {
+  const officer = { id: "P1", x: 0, y: 0, angle: 0, radius: 13 };
+  const floor = { id: "L1", kind: "floor-marking", x: 80, y: 0, height: 0, width: 20,
+    normal: { x: 0, y: 0 }, color: "#ffffff", strength: 1 };
+  const art = { id: "L2", kind: "wall-art", x: 100, y: 0, height: 80, width: 30,
+    normal: { x: -1, y: 0 }, color: "#ff0000", strength: 1 };
+  const world = { ...createWorld(5), officers: [officer], targets: [],
+    walls: [{ x: 100, y: -20, w: 20, h: 40 }], landmarks: [floor, art] };
+  assert.deepEqual(visibleLandmarks(world, officer, { range: 90, fov: Math.PI / 2 })
+    .map((item) => item.id), ["L1"]);
+  assert.deepEqual(visibleLandmarks(world, officer, { range: 200, fov: Math.PI / 2 })
+    .map((item) => item.id), ["L1", "L2"]);
+  officer.angle = Math.PI / 2;
+  assert.deepEqual(visibleLandmarks(world, officer, { range: 200, fov: Math.PI / 2 }), []);
+  officer.angle = 0;
+  world.walls.unshift({ x: 45, y: -15, w: 10, h: 30 });
+  assert.deepEqual(visibleLandmarks(world, officer, { range: 200, fov: Math.PI / 2 }), []);
+  world.walls.shift();
+  officer.x = 140;
+  officer.angle = Math.PI;
+  assert.equal(visibleLandmarks(world, officer, { range: 200, fov: Math.PI / 2 })
+    .some((item) => item.id === "L2"), false, "the back of wall art is not visible");
+});
+
+test("landmarks never become people, observations, or tracks", () => {
+  const world = createWorld(5);
+  const snapshot = observe(world);
+  const landmarkIds = new Set(world.landmarks.map((item) => item.id));
+  assert.equal(snapshot.some((item) => landmarkIds.has(item.targetId)), false);
+  assert.equal(visibleTo(world, "P1", snapshot).some((item) => landmarkIds.has(item.targetId)), false);
+  assert.equal(awareOf(world, "P1", snapshot).some((item) => landmarkIds.has(item.targetId)), false);
+});
+
+test("target locomotion is deterministic, bounded, and clears walls over a long run", () => {
+  const first = createWorld(5);
+  const second = createWorld(5);
+  for (let frame = 0; frame < 1800; frame++) {
+    stepWorld(first, 1 / 60);
+    stepWorld(second, 1 / 60);
+    for (const target of first.targets) {
+      assert.ok(target.x >= target.radius && target.x <= WIDTH - target.radius);
+      assert.ok(target.y >= target.radius && target.y <= HEIGHT - target.radius);
+      assert.ok(clearOfWalls(target, first.walls));
+    }
+  }
+  assert.deepEqual(first.targets, second.targets);
+});
+
+test("target gait eases through pauses, walks, and hurry stretches", () => {
+  const world = createWorld(5);
+  const speeds = [];
+  for (let frame = 0; frame < 1800; frame++) {
+    stepWorld(world, 1 / 60);
+    speeds.push(world.targets[0].motion.speed);
+  }
+  assert.ok(Math.min(...speeds) < 1, "a person pauses");
+  assert.ok(Math.max(...speeds) > 45, "a person occasionally hurries");
+  for (let index = 1; index < speeds.length; index++)
+    assert.ok(Math.abs(speeds[index] - speeds[index - 1]) <= 38 / 60 + 1e-9);
+});
+
+test("target motion has human-scale actual acceleration and modest steering", () => {
+  const world = createWorld(5);
+  let previous = world.targets.map((target) => ({ x: target.x, y: target.y, speed: 0, angle: target.angle }));
+  let peakAcceleration = 0;
+  let totalTurnRate = 0;
+  let samples = 0;
+  for (let frame = 0; frame < 900; frame++) {
+    stepWorld(world, 1 / 60);
+    world.targets.forEach((target, index) => {
+      const before = previous[index];
+      const speed = Math.hypot(target.x - before.x, target.y - before.y) * 60;
+      if (frame) peakAcceleration = Math.max(peakAcceleration, Math.abs(speed - before.speed) * 60);
+      totalTurnRate += Math.abs(angularDelta(target.angle, before.angle)) * 60;
+      samples++;
+      previous[index] = { x: target.x, y: target.y, speed, angle: target.angle };
+    });
+  }
+  assert.ok(peakAcceleration < 200, `peak actual acceleration was ${peakAcceleration}`);
+  assert.ok(totalTurnRate / samples < 0.5, "people mostly walk straight between course corrections");
+
+  const steering = createWorld(5);
+  steering.officers = [];
+  steering.walls = [];
+  steering.targets = [{ id: "T4", x: 200, y: 200, z: 200, angle: Math.PI / 2, radius: 12,
+    motion: { seed: 4, goalX: 500, goalY: 200, speed: 0, desiredSpeed: 30,
+      resumeSpeed: 30, phaseRemaining: 10, scanDirection: 1, scanAngle: null,
+      avoidRemaining: 0, avoidAngle: null } }];
+  const heading = steering.targets[0].angle;
+  stepWorld(steering, 1);
+  assert.ok(Math.abs(angularDelta(steering.targets[0].angle, heading)) > 0.2,
+    "a target still turns to steer toward its goal");
+});
+
+test("idle glances settle instead of spinning at the turn cap", () => {
+  const world = createWorld(5);
+  world.officers = [];
+  world.walls = [];
+  world.targets = [{ id: "T4", x: 200, y: 200, z: 200, angle: 0, radius: 12,
+    motion: { seed: 4, goalX: 200, goalY: 200, speed: 0, desiredSpeed: 0,
+      resumeSpeed: 0, phaseRemaining: 10, scanDirection: 1, scanAngle: 0.3,
+      avoidRemaining: 0, avoidAngle: null } }];
+  const turnRates = [];
+  for (let frame = 0; frame < 180; frame++) {
+    const before = world.targets[0].angle;
+    stepWorld(world, 1 / 60);
+    turnRates.push(Math.abs(angularDelta(world.targets[0].angle, before)) * 60);
+  }
+  assert.ok(Math.max(...turnRates) <= 0.35 + 1e-9);
+  assert.ok(turnRates.filter((rate) => rate > 1e-8).length < turnRates.length / 2);
+  assert.equal(turnRates.at(-1), 0);
+});
+
+test("each target gets an independent deterministic motion stream", () => {
+  const first = createWorld(5);
+  const second = createWorld(5);
+  assert.equal(new Set(first.targets.map((target) => target.motion.seed)).size, first.targets.length);
+  for (let frame = 0; frame < 600; frame++) {
+    stepWorld(first, 1 / 60);
+    stepWorld(second, 1 / 60);
+  }
+  assert.deepEqual(first.targets, second.targets);
+  assert.notEqual(first.targets[0].motion.seed, first.targets[1].motion.seed);
+  assert.notEqual(first.targets[1].motion.phaseRemaining, first.targets[2].motion.phaseRemaining);
+});
+
+test("target facing turns at a capped rate and follows its travel direction", () => {
+  const world = createWorld(5);
+  for (let frame = 0; frame < 360; frame++) {
+    const before = world.targets.map((target) => ({ x: target.x, y: target.y, angle: target.angle }));
+    stepWorld(world, 1 / 60);
+    world.targets.forEach((target, index) => {
+      assert.ok(Math.abs(angularDelta(target.angle, before[index].angle)) <= 2.1 / 60 + 1e-9);
+      const dx = target.x - before[index].x;
+      const dy = target.y - before[index].y;
+      if (Math.hypot(dx, dy) > 0.05)
+        assert.ok(Math.abs(angularDelta(Math.atan2(dy, dx), target.angle)) < 1e-7);
+    });
+  }
+});
+
+test("a target turns away from a wall instead of remaining stuck against it", () => {
+  const world = createWorld(5);
+  const target = world.targets[0];
+  Object.assign(target, {
+    x: 515, y: 150, z: 150, angle: 0,
+    motion: {
+      seed: 0x4f1bbcdc, goalX: 700, goalY: 150, speed: 28, desiredSpeed: 28,
+      phaseRemaining: 10, scanDirection: 1, avoidRemaining: 0,
+    },
+  });
+  let pathLength = 0;
+  for (let frame = 0; frame < 360; frame++) {
+    const before = { x: target.x, y: target.y };
+    stepWorld(world, 1 / 60);
+    pathLength += Math.hypot(target.x - before.x, target.y - before.y);
+  }
+  assert.ok(pathLength > 80);
+  assert.ok(clearOfWalls(target, world.walls));
+});
+
+test("a close wall-facing target keeps walking until it finds a route around the wall", () => {
+  const world = createWorld(5);
+  world.officers = [];
+  world.targets = [{ id: "T4", x: 515, y: 150, z: 150, angle: 0, radius: 12,
+    motion: { seed: 0x4f1bbcdc, goalX: 700, goalY: 150, speed: 20, desiredSpeed: 32,
+      resumeSpeed: 32, phaseRemaining: 20, scanDirection: 1, scanAngle: null,
+      avoidRemaining: 0, avoidAngle: null } }];
+  const target = world.targets[0];
+  let pathLength = 0;
+  for (let frame = 0; frame < 360; frame++) {
+    const before = { x: target.x, y: target.y };
+    stepWorld(world, 1 / 60);
+    pathLength += Math.hypot(target.x - before.x, target.y - before.y);
+  }
+  assert.ok(pathLength > 80);
+  assert.ok(target.motion.speed > 1, "recovery must not settle at zero speed");
+  assert.ok(clearOfWalls(target, world.walls));
+});
+
+test("targets remain mobile and collision-free through a 60-second wander", () => {
+  const world = createWorld(5);
+  const pathLengths = new Map(world.targets.map((target) => [target.id, 0]));
+  for (let frame = 0; frame < 60 * 60; frame++) {
+    const before = world.targets.map((target) => ({ x: target.x, y: target.y }));
+    stepWorld(world, 1 / 60);
+    world.targets.forEach((target, index) => {
+      pathLengths.set(target.id, pathLengths.get(target.id) +
+        Math.hypot(target.x - before[index].x, target.y - before[index].y));
+      assert.ok(target.x >= target.radius && target.x <= WIDTH - target.radius);
+      assert.ok(target.y >= target.radius && target.y <= HEIGHT - target.radius);
+      assert.ok(clearOfWalls(target, world.walls));
+    });
+  }
+  for (const [id, length] of pathLengths)
+    assert.ok(length > 1_200, `${id} only travelled ${length} world units`);
+});
+
+test("target locomotion is bit-for-bit deterministic across matching steps", () => {
+  const first = createWorld(7);
+  const second = createWorld(7);
+  for (let frame = 0; frame < 60 * 60; frame++) {
+    stepWorld(first, 1 / 60);
+    stepWorld(second, 1 / 60);
+  }
+  assert.deepEqual(first.targets, second.targets);
+});
+
+test("target locomotion never depends on the lab hostile flag", () => {
+  const first = createWorld(5);
+  const second = createWorld(5);
+  second.targets.forEach((target) => { target.hostile = !target.hostile; });
+  for (let frame = 0; frame < 600; frame++) {
+    stepWorld(first, 1 / 60);
+    stepWorld(second, 1 / 60);
+  }
+  const withoutGroundTruth = (targets) => targets.map((target) =>
+    Object.fromEntries(Object.entries(target).filter(([key]) => key !== "hostile")));
+  assert.deepEqual(withoutGroundTruth(first.targets), withoutGroundTruth(second.targets));
+});
+
 test("diagonal input has the same speed as axial input and invalid timesteps are ignored", () => {
   const axial = createWorld();
   const diagonal = createWorld();
@@ -410,4 +673,73 @@ test("awareness keeps tracks behind the officer that the view filter drops", () 
     false,
   );
   assert.deepEqual(awareOf(world, "nobody", snapshot), []);
+});
+
+const settle = (world, sensor, limit = 900) => {
+  for (let step = 0; step < limit && sensor.state === "flight"; step++)
+    stepWorld(world, 1 / 60, { selectedId: "none" });
+  return sensor;
+};
+
+test("a thrown sensor leaves the hand ahead of the officer and comes to rest", () => {
+  const world = createWorld();
+  const officer = world.officers.find((item) => item.id === "P1");
+  const origin = { x: officer.x, y: officer.y };
+  const sensor = throwSensor(world, "P1", { timestamp: 0 });
+  assert.equal(sensor.ownerId, "P1");
+  assert.equal(sensor.state, "flight");
+  assert.ok(sensor.height > 30, "the puck leaves the hand at eye height");
+  const forward = (sensor.x - origin.x) * Math.cos(officer.angle) + (sensor.y - origin.y) * Math.sin(officer.angle);
+  assert.ok(forward > 0, "it starts ahead of the thrower");
+  settle(world, sensor);
+  assert.equal(sensor.state, "settled");
+  assert.ok(sensor.settledAt > 0);
+  assert.ok(Math.hypot(sensor.vx, sensor.vy) === 0 && sensor.vz === 0);
+  assert.ok(Math.hypot(sensor.x - origin.x, sensor.y - origin.y) > 48, "it travels a usable distance");
+});
+
+test("a settled sensor stays put and never leaves the arena or a wall interior", () => {
+  const world = createWorld();
+  const sensor = settle(world, throwSensor(world, "P4", { timestamp: 0 }));
+  const resting = { x: sensor.x, y: sensor.y };
+  for (let step = 0; step < 120; step++) stepWorld(world, 1 / 60, { selectedId: "none" });
+  assert.deepEqual({ x: sensor.x, y: sensor.y }, resting);
+  assert.ok(sensor.x > 0 && sensor.x < WIDTH && sensor.y > 0 && sensor.y < HEIGHT);
+  assert.equal(
+    world.walls.some((wall) =>
+      sensor.x > wall.x && sensor.x < wall.x + wall.w && sensor.y > wall.y && sensor.y < wall.y + wall.h),
+    false,
+  );
+});
+
+test("the kit holds a limited number of pucks and recall frees a slot", () => {
+  const world = createWorld();
+  for (let index = 0; index < MAX_SENSORS; index++)
+    assert.ok(throwSensor(world, "P1", { timestamp: index }));
+  assert.equal(world.sensors.length, MAX_SENSORS);
+  assert.equal(throwSensor(world, "P1", { timestamp: 99 }), null);
+  const ids = world.sensors.map((item) => item.id);
+  assert.equal(new Set(ids).size, MAX_SENSORS, "ids are unique");
+  assert.equal(recallSensor(world, ids[0]).id, ids[0]);
+  assert.equal(recallSensor(world, "nope"), null);
+  assert.ok(throwSensor(world, "P1", { timestamp: 100 }));
+  assert.equal(throwSensor(world, "nobody", { timestamp: 101 }), null);
+});
+
+test("a track from an officer's own puck stays direct without shared vision", () => {
+  const world = createWorld();
+  const snapshot = observe(world);
+  const radar = snapshot.map((item) => ({ ...item, observers: ["M1"] }));
+  Object.defineProperty(radar, "vision", { value: snapshot.vision });
+  Object.defineProperty(radar, "sensors", { value: [{ id: "M1", ownerId: "P2" }] });
+  assert.equal(awareOf(world, "P2", radar, false).length, radar.length);
+  assert.ok(awareOf(world, "P2", radar, false).every((item) => item.kind === "direct"));
+  assert.equal(awareOf(world, "P1", radar, false).length, 0);
+});
+
+test("only the lab knows which detected body is actually hostile", () => {
+  const world = createWorld();
+  assert.deepEqual(world.targets.map((item) => item.hostile), [true, false, false]);
+  const snapshot = observe(world);
+  assert.equal(snapshot.some((item) => "hostile" in item), false);
 });

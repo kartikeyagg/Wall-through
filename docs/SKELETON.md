@@ -6,11 +6,14 @@ estimates an **18-joint body pose**, publishes it, and every teammate draws that
 pose over their own camera feed as a near-transparent, live-updating figure.
 
 ```text
-MotionTrack (position, heading, speed)
+StereoDetection (one observing camera resolved this body)
         │
         ▼
 SkeletonPoser.pose(...)            src/skeleton.js
         │  COCO-18 keypoints, gait driven by distance travelled
+        ▼
+cameraSkeleton(...)                src/vision.js
+        │  every joint projected, measured and reconstructed through THAT rig
         ▼
 publishSkeleton(officerId, ...)    src/overlay.js
         │  SkeletonFrame { layer: "overlay", synthetic: true }
@@ -23,6 +26,34 @@ translucent skeleton drawn in the receiver's feed (SimulationScene.tsx)
                     ✂ detectorInput(feed) ✂
         the detector reads through this seam and never sees a layer
 ```
+
+## A pose is a measurement, not a diagram
+
+The pose is estimated **per observing camera**, from that camera's own view of
+the body. Each of the eighteen joints is carried into the rig frame, projected
+into both image planes, and reconstructed from its own disparity, so what the
+overlay draws is what that rig could actually resolve.
+
+A joint is dropped when the camera could not have seen it: outside either
+image frame, below the matcher's disparity floor, on the far side of the torso
+from this camera's bearing, or behind a wall. Joint score falls with apparent
+pixel height, so a near subject yields a crisp pose and a distant one a faint,
+low-confidence one.
+
+Two consequences follow, and both are deliberate:
+
+- **Two officers watching the same person publish two different poses.** Each
+  is that officer's own measurement, with its own noise and its own occlusions.
+- **No camera, no pose.** A radar-only track, or a track coasting with no live
+  stereo detection, publishes nothing. A skeleton asserts that someone *saw*
+  this body, so it cannot be produced from fused state alone.
+
+Depth error is **common-mode across a body**. All eighteen keypoints come from
+one image pair of one subject, so the large range error displaces the whole
+figure together while the body stays rigid; only small keypoint-localisation
+residuals vary per joint. Drawing independent per-joint depth noise would be
+both wrong and unreadable — at ten metres on an 8 cm baseline it scatters the
+joints across metres and the figure stops looking like a person.
 
 ## The keypoint model
 

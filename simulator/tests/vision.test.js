@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createWorld, stepWorld, visibleTo } from "../src/simulation.js";
+import { createWorld, recallSensor, stepWorld, throwSensor, visibleTo } from "../src/simulation.js";
 import {
   TARGET_HEIGHT_METRES,
   StereoVisionPipeline,
@@ -12,6 +12,7 @@ import {
   trackObservations,
 } from "../src/vision.js";
 import { detectorInput } from "../src/overlay.js";
+import { BONES, restPose } from "../src/skeleton.js";
 
 function scene(officers, targets, walls = []) {
   return { time: 0, officers, targets, walls };
@@ -79,6 +80,76 @@ test("two officers fuse reports into one track with both observers", () => {
   assert.deepEqual(frame.tracks[0].observers.sort(), ["P1", "P2"]);
 });
 
+test("an uncapped pipeline captures stereo on every update", () => {
+  const world = scene([officer("P1", 0, 0)], [target("T1", 120, 0)]);
+  const pipeline = new StereoVisionPipeline({ noise: false });
+  const first = pipeline.update(world, 0);
+  const second = pipeline.update(world, 1000 / 60);
+  assert.equal(first.captured, true);
+  assert.equal(second.captured, true);
+  assert.equal(first.fps, null);
+  assert.equal(second.detections.length, 1);
+});
+
+test("a capped rig exposes roughly one stereo frame per requested interval", () => {
+  const world = scene([officer("P1", 0, 0)], [target("T1", 120, 0)]);
+  const pipeline = new StereoVisionPipeline({ noise: false, fps: 10 });
+  const frames = Array.from({ length: 61 }, (_, index) => pipeline.update(world, index * 1000 / 60));
+  const captures = frames.filter((frame) => frame.captured).length;
+  assert.ok(captures >= 9 && captures <= 11, `expected about 10 captures, got ${captures}`);
+  assert.ok(frames.some((frame) => !frame.captured));
+});
+
+test("capture rate measures recent simulated camera exposures", () => {
+  const world = scene([officer("P1", 0, 0)], [target("T1", 120, 0)]);
+  const pipeline = new StereoVisionPipeline({ noise: false, fps: 10 });
+  let frame;
+  for (let timestamp = 0; timestamp <= 1000; timestamp += 100) frame = pipeline.update(world, timestamp);
+  assert.ok(Math.abs(frame.captureRate - 10) < 0.01);
+});
+
+test("a track between exposures is still the one the last exposure resolved", () => {
+  const world = scene([officer("P1", 0, 0)], [target("T1", 120, 0)]);
+  const pipeline = new StereoVisionPipeline({ noise: false, fps: 10 });
+  const captured = pipeline.update(world, 0);
+  const skipped = pipeline.update(world, 1000 / 60);
+  assert.equal(skipped.captured, false);
+  assert.equal(skipped.detections, captured.detections);
+  assert.equal(skipped.skeletons, captured.skeletons);
+  assert.equal(skipped.tracks.length, 1);
+  // A rig that has not looked yet has not lost anyone: the operator sees the
+  // observers of the last exposure rather than a target nobody can resolve.
+  assert.equal(skipped.tracks[0].coasting, false);
+  assert.deepEqual(skipped.tracks[0].observers, ["P1"]);
+});
+
+test("a track goes coasting once the rig misses an exposure it owed", () => {
+  const world = scene([officer("P1", 0, 0)], [target("T1", 120, 0)]);
+  const pipeline = new StereoVisionPipeline({ noise: false, fps: 10 });
+  pipeline.update(world, 0);
+  world.targets[0].x = 2000; // walked out of every camera's reach
+  const overdue = pipeline.update(world, 260);
+  assert.equal(overdue.captured, true);
+  // `coasting` is the liveness signal; the tracker leaves the last observers
+  // attached to a track it is only predicting.
+  assert.equal(overdue.tracks[0].coasting, true);
+  // The hold expires with the exposure it belonged to, so the stale frame that
+  // follows cannot resurrect those observers.
+  const after = pipeline.update(world, 276);
+  assert.equal(after.tracks[0].coasting, true);
+});
+
+test("reset arms the next stereo update for capture", () => {
+  const world = scene([officer("P1", 0, 0)], [target("T1", 120, 0)]);
+  const pipeline = new StereoVisionPipeline({ noise: false, fps: 10 });
+  pipeline.update(world, 0);
+  pipeline.update(world, 1000 / 60);
+  pipeline.reset();
+  const frame = pipeline.update(world, 1000 / 30);
+  assert.equal(frame.captured, true);
+  assert.equal(frame.captureRate, 0);
+});
+
 test("successive patrol frames produce a moving track", () => {
   const world = createWorld(5);
   world.officers = [world.officers[0]];
@@ -121,6 +192,101 @@ test("a pipeline publishes one skeleton frame for every observing officer", () =
   assert.equal(frame.skeletons.length, 2);
   assert.deepEqual(frame.skeletons.map((item) => item.publisherId).sort(), ["P1", "P2"]);
   assert.ok(frame.detections.every((detection) => detection.skeleton?.trackId === detection.trackId));
+});
+
+test("a radar-only track never publishes a skeleton", () => {
+  const pipeline = new StereoVisionPipeline({ noise: false });
+  pipeline.radarFrame = (_world, timestamp) => ({
+    sensors: [], tracks: [], returns: 0,
+    measurements: [{
+      trackId: "R1", position: { x: 100, y: 0, z: 0 }, sigma: 1,
+      timestamp, confidence: 0.9, officerId: "M1", source: "mmwave",
+    }],
+  });
+  const frame = pipeline.update(scene([], []), 100);
+  assert.equal(frame.tracks.length, 1);
+  assert.deepEqual(frame.detections, []);
+  assert.deepEqual(frame.skeletons, []);
+});
+
+test("a wall that blocks an individual joint marks only that camera pose joint invisible", () => {
+  const world = scene(
+    [officer("P1", 0, 0)], [target("T1", 120, 0)],
+    [{ x: 58, y: 1, w: 4, h: 3 }],
+  );
+  const frame = new StereoVisionPipeline({ noise: false }).update(world, 100);
+  assert.equal(frame.detections.length, 1, "the body centre remains visible to the detector");
+  assert.ok(frame.detections[0].skeleton.joints.some((joint) => !joint.visible && joint.score === 0));
+});
+
+test("joint reconstruction uncertainty and confidence degrade with camera distance", () => {
+  const near = new StereoVisionPipeline({ seed: 9 }).update(scene([officer("P1", 0, 0)], [target("T1", 100, 0)]), 100);
+  const far = new StereoVisionPipeline({ seed: 9 }).update(scene([officer("P1", 0, 0)], [target("T1", 350, 0)]), 100);
+  const cleanNear = new StereoVisionPipeline({ noise: false }).update(scene([officer("P1", 0, 0)], [target("T1", 100, 0)]), 100);
+  const cleanFar = new StereoVisionPipeline({ noise: false }).update(scene([officer("P1", 0, 0)], [target("T1", 350, 0)]), 100);
+  const nearJoint = near.detections[0].skeleton.joints.find((joint) => joint.visible);
+  const farJoint = far.detections[0].skeleton.joints.find((joint) => joint.visible);
+  const jointError = (noisy, clean) => noisy.joints.reduce((sum, joint, index) => sum
+    + Math.hypot(joint.x - clean.joints[index].x, joint.y - clean.joints[index].y, joint.z - clean.joints[index].z), 0) / noisy.joints.length;
+  assert.ok(farJoint.sigma > nearJoint.sigma);
+  assert.ok(jointError(far.detections[0].skeleton, cleanFar.detections[0].skeleton)
+    > jointError(near.detections[0].skeleton, cleanNear.detections[0].skeleton));
+  assert.ok(far.detections[0].skeleton.confidence < near.detections[0].skeleton.confidence);
+  assert.ok(near.detections[0].skeleton.confidence > 0.8);
+});
+
+test("camera poses keep anatomy rigid while range still lowers confidence", () => {
+  const options = { seed: 7, range: 420, fov: 117 * Math.PI / 180 };
+  const rest = restPose(42);
+  const restLengths = BONES.map(({ a, b }) => Math.hypot(
+    rest[a].x - rest[b].x, rest[a].y - rest[b].y, rest[a].z - rest[b].z,
+  ));
+  const measure = (range) => new StereoVisionPipeline(options).update(
+    scene([officer("P1", 0, 0)], [target("T1", range, 0)]), 100,
+  ).detections[0].skeleton;
+  const near = measure(100);
+  const far = measure(420);
+  for (const skeleton of [near, far]) {
+    const xs = skeleton.joints.map((joint) => joint.x);
+    const ys = skeleton.joints.map((joint) => joint.y);
+    const height = Math.max(...ys) - Math.min(...ys);
+    const width = Math.max(...xs) - Math.min(...xs);
+    assert.ok(height >= 42 * 0.75 && height <= 42 * 1.25);
+    assert.ok(width <= height / 2);
+    for (let index = 0; index < BONES.length; index += 1) {
+      const { a, b } = BONES[index];
+      const length = Math.hypot(
+        skeleton.joints[a].x - skeleton.joints[b].x,
+        skeleton.joints[a].y - skeleton.joints[b].y,
+        skeleton.joints[a].z - skeleton.joints[b].z,
+      );
+      assert.ok(length >= restLengths[index] * 0.7 && length <= restLengths[index] * 1.3);
+    }
+  }
+  const errorFromClean = (range, noisy) => {
+    const clean = new StereoVisionPipeline({ ...options, noise: false }).update(
+      scene([officer("P1", 0, 0)], [target("T1", range, 0)]), 100,
+    ).detections[0].skeleton;
+    return noisy.joints.reduce((sum, joint, index) => sum + Math.hypot(
+      joint.x - clean.joints[index].x,
+      joint.y - clean.joints[index].y,
+      joint.z - clean.joints[index].z,
+    ), 0) / noisy.joints.length;
+  };
+  assert.ok(errorFromClean(420, far) > errorFromClean(100, near));
+  assert.ok(far.confidence < near.confidence);
+});
+
+test("camera poses retain gait phase independently and continuously per observer", () => {
+  const world = sharedScene();
+  const pipeline = new StereoVisionPipeline({ noise: false });
+  pipeline.update(world, 0);
+  world.targets[0].x += 40;
+  const frame = pipeline.update(world, 1000);
+  const phases = new Map(frame.detections.map((detection) => [detection.officerId, detection.skeleton.phase]));
+  assert.ok(phases.get("P1") > 0 && phases.get("P2") > 0);
+  assert.equal(phases.get("P1"), pipeline.poser.phaseOf("T1", "P1"));
+  assert.equal(phases.get("P2"), pipeline.poser.phaseOf("T1", "P2"));
 });
 
 test("published skeleton frames are synthetic overlay layers", () => {
@@ -194,4 +360,101 @@ test("track observations attach the highest-confidence supplied skeleton only", 
   const observations = trackObservations(frame.tracks, { range: 420, fov: Math.PI }, [low, high]);
   assert.equal(observations[0].skeleton.phase, 2);
   assert.equal("skeleton" in trackObservations(frame.tracks, { range: 420, fov: Math.PI })[0], false);
+});
+
+/** Run the world and pipeline together, as the app does. */
+function fly(world, pipeline, frames, onFrame) {
+  let frame;
+  for (let step = 0; step < frames; step++) {
+    stepWorld(world, 1 / 60, { selectedId: "none" });
+    frame = pipeline.update(world, world.time * 1000);
+    onFrame?.(frame);
+  }
+  return frame;
+}
+
+test("a puck in flight is never localized, and a settled one is fixed by the cameras", () => {
+  const world = createWorld();
+  const pipeline = new StereoVisionPipeline({ rig: { baseline: 0.08 }, fov: 117 * Math.PI / 180, range: 420 });
+  const puck = throwSensor(world, "P1", { timestamp: 0 });
+  let airborneLocated = false;
+  fly(world, pipeline, 60, (frame) => {
+    const report = frame.sensors.find((item) => item.id === puck.id);
+    if (report.state === "flight" && (report.located || report.fixes > 0)) airborneLocated = true;
+  });
+  assert.equal(airborneLocated, false, "a tumbling puck must not be averaged into a fix");
+  const frame = fly(world, pipeline, 600);
+  const report = frame.sensors.find((item) => item.id === puck.id);
+  assert.equal(puck.state, "settled");
+  assert.ok(report.located, "settled and in view, the puck gets a fix");
+  assert.ok(report.fixes > 1 && report.observers.length > 0);
+  const error = Math.hypot(report.position.x - puck.x, report.position.y - puck.y);
+  assert.ok(error < 12, `estimate within 12 units, got ${error.toFixed(1)}`);
+  // An estimator that reports less error than it makes is worse than useless.
+  assert.ok(report.sigma > 0 && error < report.sigma * 5, "reported sigma is consistent with real error");
+});
+
+test("a located puck tracks a moving body through a wall and feeds the fused tracker", () => {
+  const world = createWorld();
+  const pipeline = new StereoVisionPipeline({ rig: { baseline: 0.08 }, fov: 117 * Math.PI / 180, range: 420 });
+  // T1 patrols the room beyond the long wall; P2 faces that wall and throws.
+  Object.assign(world.targets[0], { x: 300, y: 250, angle: 0.05 });
+  throwSensor(world, "P2", { timestamp: 0 });
+  let radarFrames = 0, fusedFrames = 0, throughWall = 0;
+  fly(world, pipeline, 900, (frame) => {
+    if (frame.radarTracks.length) radarFrames += 1;
+    if (frame.radarTracks.some((track) => track.wallsCrossed > 0)) throughWall += 1;
+    if (frame.tracks.some((track) => track.sources.includes("mmwave"))) fusedFrames += 1;
+  });
+  assert.ok(radarFrames > 100, `radar should hold the body for a good while, got ${radarFrames} frames`);
+  assert.ok(throughWall > 0, "at least some of those returns came through drywall");
+  assert.ok(fusedFrames > 100, `radar measurements should reach the shared tracker, got ${fusedFrames}`);
+});
+
+test("recalling a puck retires its estimate and its filter", () => {
+  const world = createWorld();
+  const pipeline = new StereoVisionPipeline({ rig: { baseline: 0.08 }, fov: 117 * Math.PI / 180, range: 420 });
+  const puck = throwSensor(world, "P1", { timestamp: 0 });
+  assert.ok(fly(world, pipeline, 600).sensors[0].located);
+  recallSensor(world, puck.id);
+  const frame = fly(world, pipeline, 30);
+  assert.deepEqual(frame.sensors, []);
+  assert.deepEqual(frame.radarTracks, []);
+  assert.equal(pipeline.localizer.estimateFor(puck.id), undefined);
+  // A puck thrown into the same id slot must start from nothing.
+  throwSensor(world, "P1", { timestamp: world.time * 1000 });
+  assert.equal(pipeline.update(world, world.time * 1000).sensors[0].fixes, 0);
+});
+
+test("observations carry the modality behind each track and their pucks' owners", () => {
+  const world = createWorld();
+  const pipeline = new StereoVisionPipeline({ rig: { baseline: 0.08 }, fov: 117 * Math.PI / 180, range: 420 });
+  throwSensor(world, "P2", { timestamp: 0 });
+  const frame = fly(world, pipeline, 600);
+  const observations = trackObservations(frame.tracks, { range: 420, fov: 2 }, frame.skeletons, frame.sensors);
+  assert.ok(observations.every((item) => Array.isArray(item.sources) && item.stereo === item.sources.includes("stereo")));
+  assert.ok(observations.every((item) => item.radar === item.sources.includes("mmwave")));
+  assert.deepEqual(observations.sensors, [{ id: "M1", ownerId: "P2" }]);
+});
+
+test("one puck holds one radar track per body instead of breeding ghosts", () => {
+  const world = createWorld();
+  const pipeline = new StereoVisionPipeline({ rig: { baseline: 0.08 }, fov: 117 * Math.PI / 180, range: 420 });
+  throwSensor(world, "P2", { timestamp: 0 });
+  const lifetimes = new Map();
+  let mostAtOnce = 0;
+  fly(world, pipeline, 1500, (frame) => {
+    for (const track of frame.radarTracks)
+      lifetimes.set(track.trackId, (lifetimes.get(track.trackId) ?? 0) + 1);
+    mostAtOnce = Math.max(mostAtOnce, frame.radarTracks.length);
+  });
+  // Three bodies exist; a filter that rejects good returns during a turn spawns
+  // a rival track each time and the count runs away. A body that walks out of
+  // the puck's reach and comes back is a second id for the same person, so the
+  // ghost signature is concurrency and churn, not the lifetime id count: a
+  // rival track is born beside a live one and dies young.
+  assert.ok(mostAtOnce <= world.targets.length, `expected at most ${world.targets.length} live at once, got ${mostAtOnce}`);
+  assert.ok(lifetimes.size <= world.targets.length * 2, `expected few re-acquisitions, got ${lifetimes.size} radar tracks`);
+  for (const [trackId, frames] of lifetimes)
+    assert.ok(frames > 120, `${trackId} lived only ${frames} frames, which is track churn rather than a re-acquisition`);
 });

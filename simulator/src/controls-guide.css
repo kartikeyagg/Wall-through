@@ -1,0 +1,213 @@
+.controls-guide {
+  display: inline-flex;
+}
+
+.controls-guide-button,
+.controls-guide-close {
+  font: 10px monospace;
+  letter-spacing: 0.9px;
+  text-transform: uppercase;
+}
+
+.controls-guide-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 11px;
+  color: #dce7ec;
+  background: #1a252d;
+  border: 1px solid #35414a;
+  border-radius: 5px;
+}
+
+.controls-guide-button:hover {
+  background: #293740;
+}
+
+.controls-guide-button:focus-visible,
+.controls-guide-close:focus-visible {
+  outline: 2px solid #bcf574;
+  outline-offset: 3px;
+}
+
+.controls-guide-backdrop {
+  position: fixed;
+  z-index: 50;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgb(4 9 12 / 78%);
+}
+
+.controls-guide-panel {
+  width: min(700px, 100%);
+  max-height: min(760px, calc(100vh - 36px));
+  overflow: auto;
+  color: #e5ebef;
+  background: #111b22;
+  border: 1px solid #40505a;
+  border-radius: 9px;
+  box-shadow: 0 22px 70px rgb(0 0 0 / 48%);
+}
+
+.controls-guide-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  padding: 18px 20px;
+  background: #142029;
+  border-bottom: 1px solid #2a353c;
+}
+
+.controls-guide-header p,
+.controls-guide-header h2,
+.controls-guide-group h3,
+.controls-guide-note {
+  margin: 0;
+}
+
+.controls-guide-header p,
+.controls-guide-group h3 {
+  color: #bcf574;
+  font: 10px monospace;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+.controls-guide-header h2 {
+  margin-top: 6px;
+  font-size: 17px;
+  font-weight: 500;
+}
+
+.controls-guide-close {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  color: #b9c7cf;
+  font-size: 22px;
+  line-height: 1;
+  background: #1a252d;
+  border: 1px solid #35414a;
+  border-radius: 5px;
+}
+
+.controls-guide-close:hover {
+  color: #fff;
+  background: #293740;
+}
+
+.controls-guide-body {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  padding: 18px 20px 20px;
+}
+
+.controls-guide-group {
+  padding: 14px;
+  background: #101a20;
+  border: 1px solid #293941;
+  border-radius: 6px;
+}
+
+.controls-guide-note {
+  margin-top: 7px;
+  color: #8c9ba5;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.controls-guide-group ul {
+  display: grid;
+  gap: 10px;
+  padding: 0;
+  margin: 14px 0 0;
+  list-style: none;
+}
+
+.controls-guide-group li {
+  display: grid;
+  grid-template-columns: minmax(104px, auto) 1fr;
+  gap: 10px;
+  align-items: start;
+}
+
+.controls-guide-keys {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.controls-guide-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.controls-guide-separator {
+  color: #71838f;
+  font: 10px monospace;
+}
+
+.controls-guide-panel kbd {
+  display: inline-block;
+  padding: 3px 5px;
+  color: #dce7ec;
+  font: 10px monospace;
+  white-space: nowrap;
+  background: #1c2a33;
+  border: 1px solid #3a4a54;
+  border-bottom-color: #53646e;
+  border-radius: 3px;
+}
+
+.controls-guide-action {
+  color: #c7d2d8;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.controls-guide-action small {
+  display: block;
+  margin-top: 3px;
+  color: #8c9ba5;
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+@media (max-width: 560px) {
+  .controls-guide-backdrop {
+    align-items: end;
+    padding: 10px;
+  }
+
+  .controls-guide-panel {
+    max-height: calc(100vh - 20px);
+  }
+
+  .controls-guide-header,
+  .controls-guide-body {
+    padding-right: 14px;
+    padding-left: 14px;
+  }
+
+  .controls-guide-body {
+    grid-template-columns: 1fr;
+    gap: 10px;
+    padding-top: 14px;
+    padding-bottom: 14px;
+  }
+
+  .controls-guide-group li {
+    grid-template-columns: 1fr;
+    gap: 5px;
+  }
+}

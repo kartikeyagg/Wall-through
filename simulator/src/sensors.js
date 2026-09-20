@@ -9,9 +9,48 @@
  * @typedef {{ source: string, read: (timestamp?: number) => SensorDetection[] }} DetectionProvider
  */
 
+import { visibleLandmarks } from "./simulation.js";
+
 const wrapAngle = (angle) => Math.atan2(Math.sin(angle), Math.cos(angle));
 const blendAngle = (primary, secondary, secondaryWeight) =>
   wrapAngle(primary + wrapAngle(secondary - primary) * secondaryWeight);
+const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
+
+function stereoPosition(officer, phase, sigma) {
+  return {
+    x: officer.x + Math.sin(phase) * sigma,
+    y: 1.7,
+    z: officer.y + Math.cos(phase * 1.13) * sigma,
+  };
+}
+
+// Widely separated bearings make translation observable; a cluster does not.
+function landmarkFix(landmarks, officer, range, fov, qualityScale) {
+  const features = landmarks.map((landmark) => {
+    const distance = Math.hypot(landmark.x - officer.x, landmark.y - officer.y);
+    const nearWeight = 0.25 + 0.75 * (1 - clamp(distance / range, 0, 1));
+    return {
+      bearing: wrapAngle(Math.atan2(landmark.y - officer.y, landmark.x - officer.x) - officer.angle),
+      weight: clamp(Number(landmark.strength) || 0, 0, 1) * nearWeight,
+    };
+  }).filter((feature) => feature.weight > 0);
+  const support = features.reduce((total, feature) => total + feature.weight, 0);
+  let pairs = 0, separation = 0;
+  for (let index = 0; index < features.length; index += 1) {
+    for (let other = index + 1; other < features.length; other += 1) {
+      const pairWeight = features[index].weight * features[other].weight;
+      pairs += pairWeight;
+      separation += pairWeight * Math.abs(wrapAngle(features[index].bearing - features[other].bearing));
+    }
+  }
+  const spread = pairs ? clamp(separation / pairs / fov, 0, 1) : 0;
+  const geometry = 0.15 + 0.85 * spread;
+  return {
+    landmarks: features.length,
+    spread,
+    quality: 1 - Math.exp(-support * geometry / qualityScale),
+  };
+}
 
 export function toSensorPosition(agent, height = 1) {
   return { x: agent.x, y: height, z: agent.y };
@@ -39,24 +78,88 @@ export function createSimulatedPoseProvider(world) {
  * and demos remain repeatable.
  */
 export class SelfLocalization {
-  constructor({ stereoPositionError = 0.7, compassError = 0.012, imuWeight = 0.14 } = {}) {
+  constructor({
+    stereoPositionError = 0.7,
+    compassError = 0.012,
+    imuWeight = 0.14,
+    stereoGoodPositionError = 0.12,
+    stereoPoorPositionError = 1.4,
+    landmarkRange = 420,
+    landmarkFov = Math.PI * 0.65,
+    landmarkQualityScale = 0.4,
+    lostFixGrowth = 0.35,
+  } = {}) {
     this.stereoPositionError = stereoPositionError;
     this.compassError = compassError;
     this.imuWeight = imuWeight;
+    this.stereoGoodPositionError = stereoGoodPositionError;
+    this.stereoPoorPositionError = Math.max(stereoGoodPositionError, stereoPoorPositionError);
+    this.landmarkRange = landmarkRange;
+    this.landmarkFov = landmarkFov;
+    this.landmarkQualityScale = landmarkQualityScale;
+    this.lostFixGrowth = lostFixGrowth;
     this.states = new Map();
   }
 
   update(world, timestamp = world.time * 1000, { imuEnabled = true } = {}) {
     return world.officers.map((officer, index) => {
       const phase = timestamp / 1000 * 1.7 + index * 2.31;
-      // A fixed map of visual wall/corner features provides the stereo fix.
-      const stereo = {
-        x: officer.x + Math.sin(phase) * this.stereoPositionError,
-        y: 1.7,
-        z: officer.y + Math.cos(phase * 1.13) * this.stereoPositionError,
-      };
-      const compassYaw = wrapAngle(officer.angle + Math.sin(phase * 0.61) * this.compassError);
       const previous = this.states.get(officer.id);
+      const hasLandmarkMap = Array.isArray(world.landmarks) && world.landmarks.length > 0;
+      let stereo, fix, lostFor = 0, lossDirection = null;
+      if (!hasLandmarkMap) {
+        // Preserve legacy worlds exactly until they opt into visual landmarks.
+        stereo = stereoPosition(officer, phase, this.stereoPositionError);
+        fix = { quality: 0, landmarks: 0, spread: 0, sigma: this.stereoPositionError };
+      } else {
+        const landmarks = visibleLandmarks(world, officer, {
+          range: this.landmarkRange,
+          fov: this.landmarkFov,
+        });
+        const measured = landmarkFix(
+          landmarks,
+          officer,
+          this.landmarkRange,
+          this.landmarkFov,
+          this.landmarkQualityScale,
+        );
+        if (measured.landmarks) {
+          const sigma = this.stereoPoorPositionError -
+            (this.stereoPoorPositionError - this.stereoGoodPositionError) * measured.quality;
+          stereo = stereoPosition(officer, phase, sigma);
+          fix = { ...measured, sigma };
+        } else {
+          const dt = previous && timestamp > previous.timestamp
+            ? (timestamp - previous.timestamp) / 1000
+            : 0;
+          lostFor = previous
+            ? previous.lostFor + dt
+            : (this.stereoPoorPositionError - this.stereoGoodPositionError) / Math.max(this.lostFixGrowth, 1e-6);
+          const sigma = previous
+            ? Math.min(
+                this.stereoPoorPositionError,
+                Math.max(previous.sigma, this.stereoGoodPositionError) + dt * this.lostFixGrowth,
+              )
+            : this.stereoPoorPositionError;
+          const previousBias = previous?.coastBias;
+          const biasLength = previousBias && Math.hypot(previousBias.x, previousBias.z);
+          lossDirection = previous?.lossDirection ?? (biasLength
+            ? { x: previousBias.x / biasLength, z: previousBias.z / biasLength }
+            : { x: Math.sin(phase), z: Math.cos(phase * 1.13) });
+          const targetBias = { x: lossDirection.x * sigma, z: lossDirection.z * sigma };
+          // Retain the last pose bias, then drift toward a bounded dead-reckoning error.
+          const blend = clamp(dt * 2.5, 0, 0.35);
+          const bias = previous?.coastBias
+            ? {
+                x: previous.coastBias.x + (targetBias.x - previous.coastBias.x) * blend,
+                z: previous.coastBias.z + (targetBias.z - previous.coastBias.z) * blend,
+              }
+            : targetBias;
+          stereo = { x: officer.x + bias.x, y: 1.7, z: officer.y + bias.z };
+          fix = { quality: 0, landmarks: 0, spread: 0, sigma };
+        }
+      }
+      const compassYaw = wrapAngle(officer.angle + Math.sin(phase * 0.61) * this.compassError);
       let position = stereo, yaw = compassYaw, imu = null;
       if (imuEnabled && previous && timestamp > previous.timestamp) {
         const dt = (timestamp - previous.timestamp) / 1000;
@@ -88,9 +191,19 @@ export class SelfLocalization {
         position,
         orientation: { yaw, pitch: 0, roll: 0 },
         sources: { stereo: true, compass: true, imu: imuEnabled },
+        fix,
         ...(imu ? { imu } : {}),
       };
-      this.states.set(officer.id, { timestamp, position, yaw, truth: { x: officer.x, y: officer.y, angle: officer.angle } });
+      this.states.set(officer.id, {
+        timestamp,
+        position,
+        yaw,
+        truth: { x: officer.x, y: officer.y, angle: officer.angle },
+        coastBias: { x: position.x - officer.x, z: position.z - officer.y },
+        lostFor,
+        lossDirection,
+        sigma: fix.sigma,
+      });
       return estimate;
     });
   }

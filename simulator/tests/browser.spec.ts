@@ -2,7 +2,7 @@ import { test, expect, type Page } from "@playwright/test";
 
 async function pausedScene(page: Page) {
   await page.goto("/");
-  await expect(page.locator("canvas")).toBeVisible();
+  await expect(page.locator(".three-canvas canvas")).toBeVisible();
   await expect(page.locator(".map-state time")).not.toHaveText("0.0s");
   await page.getByRole("button", { name: "Pause", exact: false }).click();
   await page.getByRole("button", { name: "Reset scene", exact: false }).click();
@@ -46,14 +46,15 @@ test("3D controls retain movement, scanning, reset and team sizing", async ({ pa
   const stopped = await heading.textContent();
   await page.waitForTimeout(250);
   await expect(heading).toHaveText(stopped!);
-  await page.locator("canvas").focus();
+  await page.locator(".three-canvas canvas").focus();
   await page.keyboard.press("Space");
   await expect(page.locator(".map-state")).toContainText("PAUSED");
 });
 
 test("stereo rig telemetry reacts to the baseline and range controls", async ({ page }) => {
   await pausedScene(page);
-  const readout = page.locator(".vision-readout");
+  // Self localization uses the same readout layout, so scope to this panel.
+  const readout = page.locator(".panel", { hasText: "Stereo rig telemetry" }).locator(".vision-readout");
   await expect(readout).toContainText("BASELINE");
   await expect(readout).toContainText("DISPARITY");
   await expect(readout).toContainText("DEPTH σ");
@@ -68,9 +69,25 @@ test("stereo rig telemetry reacts to the baseline and range controls", async ({ 
   await expect.poll(reach).toBeLessThan(wide);
 });
 
+test("the camera frame rate slider retimes the rigs and reports what they achieve", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator(".three-canvas canvas")).toBeVisible();
+  const readout = page.locator(".panel", { hasText: "Stereo rig telemetry" }).locator(".vision-readout");
+  const reported = async () => Number((await readout.locator("div", { hasText: "CAMERA FPS" }).first().innerText()).replace(/[^\d.]/g, ""));
+  const slider = page.getByRole("slider", { name: "Camera frame rate" });
+  await expect(slider).toHaveValue("30");
+  // The readout is the rate the rigs reach, so it follows the slider down.
+  await slider.fill("5");
+  await expect.poll(reported, { timeout: 15_000 }).toBeLessThan(8);
+  await slider.fill("30");
+  await expect.poll(reported, { timeout: 15_000 }).toBeGreaterThan(12);
+  // Retiming the rig must not cost the officer the tracks they already hold.
+  await expect(page.locator(".contacts")).not.toContainText("No confirmed live tracks");
+});
+
 test("movement marking exposes live speed, heading and motion toggles", async ({ page }) => {
   await page.goto("/");
-  await expect(page.locator("canvas")).toBeVisible();
+  await expect(page.locator(".three-canvas canvas")).toBeVisible();
   await page.getByRole("switch", { name: "Shared vision" }).check();
   const motion = page.locator(".contact .motion").first();
   await expect(motion).toBeVisible();
@@ -153,4 +170,107 @@ test("self localization reports stereo and compass with an optional IMU", async 
   await imu.uncheck();
   await expect(panel).toContainText("STEREO + COMPASS");
   await expect(imu).not.toBeChecked();
+});
+
+test("a thrown puck is tagged by the cameras and reported by the sensor net", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto("/");
+  await expect(page.locator(".three-canvas canvas")).toBeVisible();
+  const panel = page.locator(".panel", { hasText: "mmWave sensor net" });
+  await expect(panel).toContainText("No pucks deployed");
+  await page.getByRole("button", { name: "Throw mmWave sensor" }).click();
+  const puck = panel.locator(".puck").first();
+  await expect(puck).toContainText("M1");
+  // It has to land before anyone can fix it, and be fixed before it is useful.
+  await expect(puck).toContainText("LOCATED", { timeout: 20_000 });
+  await expect(panel.locator(".tiny")).toContainText("1/1 ACTIVE");
+  await expect(panel).toContainText("RADAR REACH");
+  await page.getByRole("button", { name: "Recall sensor M1" }).click();
+  await expect(panel).toContainText("No pucks deployed");
+  expect(errors).toEqual([]);
+});
+
+test("an officer can clear a false positive and put the flag back", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await pausedScene(page);
+  const tracks = page.locator(".panel", { hasText: "Live vision tracks" });
+  await expect(tracks.locator(".contact").first()).toBeVisible();
+  const id = (await tracks.locator(".contact strong").first().innerText()).split(" ")[0];
+  // Key on the id: the list reorders as tracks come and go.
+  const contact = tracks.locator(".contact", { hasText: id });
+  await expect(tracks.locator(".tiny")).toContainText("0 CLEARED");
+  await contact.getByRole("button", { name: `Clear ${id} as a false positive` }).click();
+  await expect(contact).toContainText("CLEARED");
+  await expect(contact).toContainText("cleared by");
+  await expect(tracks.locator(".tiny")).toContainText("1 CLEARED");
+  // The correction is the team's, so another officer's view carries it too.
+  await page.getByRole("button", { name: "Select officer P1", exact: true }).click();
+  await expect(tracks.locator(".contact.cleared")).toHaveCount(1);
+  await contact.getByRole("button", { name: `Re-flag ${id} as a threat` }).click();
+  await expect(tracks.locator(".tiny")).toContainText("0 CLEARED");
+  await expect(tracks.locator(".contact.cleared")).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
+test("the controls guide lists the keyboard and mouse bindings", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto("/");
+  await expect(page.locator(".three-canvas canvas")).toBeVisible();
+  const trigger = page.getByRole("button", { name: "Show keyboard and mouse controls" });
+  await expect(trigger).toHaveAttribute("aria-expanded", "false");
+  await trigger.click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+  // Every context an operator drives the sim from has to be represented.
+  for (const group of ["Movement", "Looking around", "Sensors", "World overview camera", "Minimap", "Simulation"])
+    await expect(dialog).toContainText(group);
+  await expect(dialog).toContainText("Throw an mmWave sensor puck");
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+  // The guide is also reachable without hunting for the button.
+  await page.keyboard.press("?");
+  await expect(page.getByRole("dialog")).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test("the minimap plots self-localized officers and detected tracks", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await pausedScene(page);
+  const minimap = page.locator(".minimap");
+  await expect(minimap.locator("canvas")).toBeVisible();
+  // It reports what the team knows, so officers and live tracks must both reach it.
+  await expect(minimap).toContainText(/OFFICER/i);
+  const headingUp = page.getByRole("button", { name: "Toggle heading-up map" });
+  await expect(headingUp).toHaveAttribute("aria-pressed", "true");
+  await headingUp.click();
+  await expect(headingUp).toHaveAttribute("aria-pressed", "false");
+  const expand = page.getByRole("button", { name: "Expand tactical minimap" });
+  await expand.click();
+  await expect(minimap).toHaveClass(/minimap--expanded/);
+  await page.getByRole("button", { name: "Collapse tactical minimap" }).click();
+  await expect(minimap).not.toHaveClass(/minimap--expanded/);
+  expect(errors).toEqual([]);
+});
+
+test("mouse look can be switched off so clicks keep selecting", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await pausedScene(page);
+  const mouseLook = page.getByRole("checkbox", { name: "Mouse look (glasses)" });
+  await expect(mouseLook).toBeChecked();
+  await mouseLook.uncheck();
+  await page.getByRole("button", { name: "Officer glasses" }).click();
+  const canvas = page.locator(".three-canvas canvas");
+  await expect(canvas).toBeVisible();
+  // Clear of the minimap, which deliberately overlays the top-left corner.
+  const box = (await canvas.boundingBox())!;
+  // With the toggle off nothing may capture the pointer, so a click stays a click.
+  await canvas.click({ position: { x: box.width / 2, y: box.height / 2 } });
+  expect(await page.evaluate(() => document.pointerLockElement !== null)).toBe(false);
+  await expect(page.locator(".look-hint")).toBeHidden();
+  expect(errors).toEqual([]);
 });

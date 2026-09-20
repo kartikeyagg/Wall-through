@@ -10,6 +10,19 @@ The world overview is an inspectable third-person 3D scene. Officer glasses is a
 
 Each officer carries one sensor: the head-mounted stereo camera. Its two glass lenses sit directly over the officer's eyes, so the camera's optical axis and the officer's line of sight are the same. The old line-of-sight `simulated-camera` detection provider has been removed.
 
+### Landmarks are the map the rigs localize against
+
+`world.landmarks` is a fixed set of visual features with a position, a facing
+normal, a colour and a `strength` — how distinctive the feature is to a matcher.
+`visibleLandmarks(world, officer, { range, fov })` returns the ones an officer
+can actually see, respecting range, field of view, wall occlusion, and which
+side of a wall a mounted item faces.
+
+That set drives the quality of the stereo fix, so the decoration is load
+bearing rather than cosmetic. A low-`strength` landmark is drawn washed out and
+a high-`strength` one bold, so the picture on screen explains the number in the
+panel. One stretch of wall is deliberately left bare.
+
 ### Self localization: stereo map features, compass, then IMU
 
 Every police head rig also has a compass and a compact IMU. `SelfLocalization` in `src/sensors.js` derives a primary self-pose from known static stereo map features (walls and corners) and compass heading. It then applies the IMU's integrated velocity and yaw as a low-weight correction. This order is deliberate: the simulation makes the IMU noticeably noisier than a real unit, so it may smooth a pose but cannot replace stereo and compass.
@@ -18,7 +31,15 @@ The **Self localization** panel exposes local X/Z, compass heading, and simulate
 
 ### Lightweight people and environment
 
-People are articulated low-poly figures with heads, clothing, arms, and legs that swing as they patrol. Officers use a dark tactical vest; the three moving subjects have distinct clothing and skin tones. The environment uses generated concrete-grid floor and wall-panel textures plus high-contrast safety stripes. These visual details make the first-person stereo scene easier to inspect while keeping the scene small and asset-free.
+People are articulated figures with a neck, tapered chest and pelvis, jointed arms and legs, hands, and feet. The walk cycle bends the knee, strikes the heel, counter-swings the arms with the elbow flexed, and counter-rotates the shoulders against the hips; when a person stops, it settles into a weight-shifting idle rather than freezing. Officers use a dark tactical vest; the three moving subjects differ in height, build, and clothing.
+
+Those appearances derive from the person's id alone. Nothing about how a person looks or moves correlates with the lab-only `hostile` flag — if it did, the operator could read ground truth off the screen and the clearing exercise would be meaningless.
+
+They also move like people rather than billiard balls: each person eases between walking, pausing, and hurrying, steers toward a waypoint at a capped turn rate, rounds a wall instead of reflecting off it, and keeps scanning while stopped. The motion is seeded per person, so the simulation stays reproducible.
+
+A waypoint is a destination, not a steering instruction: the route may cross a partition, and a local planner scores a fan of candidate headings against clearance, progress and the heading already held, then walks the best one. Easing off for an obstacle is never a stop state — a person who has slowed in front of a wall still turns at walking pace, and a stuck check forces a fresh course correction if anyone fails to cover ground for a second. Contact is a graze rather than a dead stop: the body slides along the surface and keeps the speed it actually achieved, so a brushed wall costs momentum instead of snapping the gait. Over two simulated minutes each person now covers thousands of world units without pinning themselves to a wall.
+
+The environment is generated at load: floor tiles with grout, per-tile tone variation and wear, and walls with panel seams, a chair rail, skirting, and a capped top edge, lit through a matching bump map. Scattered over that are **landmarks** — framed pictures, posters, wall panels, floor markings and small fixtures — which are what the stereo rigs match against to locate themselves. They are scenery: they never move, never collide, and never enter any detection, track or threat path. These visual details make the first-person stereo scene easier to inspect while keeping the scene small and asset-free.
 
 The current detector remains a deterministic geometric stereo model, not an image classifier: textures do not alter a detection result. They are also the visible reference map represented by the self-localization seam, ready for replacement with real feature matching later.
 
@@ -53,7 +74,10 @@ Arrows only appear for real tracks: the officer's own, plus teammates' when **Sh
 | Ctrl + drag (overview) | Orbit the camera: left/right rotates around the arena, up/down tilts from near-ground to top-down |
 | Ctrl + scroll (overview) | Zoom the overview camera in and out |
 | Double-click (overview) | Reset the overview camera to its default angle and distance |
-| Ctrl + drag (glasses) | Turn the selected officer left/right; the view stays locked to their stereo rig |
+| Click empty glasses view | Capture the mouse and steer the officer's heading directly, as in a first-person game; Esc releases it |
+| Click a person, any view | Clear or re-flag them. While the mouse is captured this picks at the centre crosshair, so look at someone and click |
+| Mouse look | Turn mouse capture off entirely. Clicks then always select, and Ctrl + drag remains the way to turn |
+| Ctrl + drag (glasses) | Turn the selected officer left/right without capturing the mouse; the view stays locked to their stereo rig |
 | Shared vision | Show/hide teammate-provided 3D target outlines |
 | Field of view / range | Adjust the stereo rig's horizontal FOV and operator range cutoff |
 | Stereo baseline | Set the lens separation on the head rig, 2–30 cm |
@@ -62,8 +86,50 @@ Arrows only appear for real tracks: the officer's own, plus teammates' when **Sh
 | Direction arrows | In glasses view, point an arrow toward every known target, including those behind the officer |
 | Skeleton overlay | Draw 18-joint body poses for resolved subjects |
 | Overlay opacity | Ceiling alpha for teammate-published skeletons, 0–100% |
+| F / Throw sensor | Throw an mmWave puck along the selected officer's heading |
+| Recall | Remove a deployed puck and return it to the kit |
+| Click a person / Not a terrorist | Toggle that live track between flagged and cleared, attributed to the selected officer |
+| Radar coverage rings | Draw the ground footprint of located puck coverage in the overview |
+| Hide cleared people | Hide cleared track markers while keeping their bodies visible |
+| Controls / `?` | Open the in-app guide to every keyboard and mouse binding; Esc closes it |
+| Minimap | Plot the hall, the officers, and the detected tracks — see [the minimap guide](MINIMAP.md) |
 
 Camera range and occlusion apply only to the officer who makes a sensor measurement. A receiving officer still has to face an incoming live track, but is not range-limited. When direct reports stop, a track coasts on predicted motion for a short confidence window before removal instead of becoming a permanent last-known-position marker.
+
+## Thrown-sensor lifecycle
+
+`world.sensors` holds deployed pucks. `throwSensor` creates one ahead of the
+throwing officer at eye height and records that officer as its owner.
+`stepWorld` advances a thrown puck with gravity and air drag, sweeps it against
+the same floor-to-ceiling wall colliders as the people, lets it bounce and
+skid, and marks it settled when it comes to rest. `recallSensor` removes a puck
+from the world; the kit holds at most four deployed sensors.
+
+A settled puck is not immediately useful. The stereo pipeline fixes its known
+marker from visible officer rigs and fuses the fixes into an estimated origin.
+Only a located puck samples its radar from that estimate. See [the mmWave puck
+guide](MMWAVE.md#thrown-mmwave-radar-puck) for the states, localization choices,
+and radar tracking.
+
+Targets also carry a `hostile` flag in this lab world. It is ground truth only:
+it is excluded from sensors, tracks, and officer-facing observations, because
+the exercise is that sensors flag bodies while an officer judges intent.
+
+## Sensor ownership and shared vision
+
+`trackObservations` carries sensor ownership beside its observation array.
+When `visibleTo` projects an observation, a report from a puck an officer
+threw counts as that officer's own measurement. It therefore remains direct
+with **Shared vision** off; a puck owned by another officer remains a teammate
+report. The simulation does not need to know radar internals to make that
+distinction.
+
+## Clearing a false positive
+
+The shared `ThreatRegistry` annotates each live observation before projection.
+A click on a person or its live-track button changes the team-wide state, while
+the original body remains in the scene. See [the threat-tagging guide](THREAT-TAGGING.md#threat-tagging-and-clearance) for the audit record, lost-track grace,
+and lab-only scoring.
 
 ## Sensor-ready architecture
 

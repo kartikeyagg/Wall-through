@@ -92,6 +92,37 @@ Matcher noise is deterministic: pass a `seed` (or `noise: false` for exact
 triangulation) and a run is byte-for-byte reproducible, which is what the tests
 rely on.
 
+## Camera frame rate
+
+A real head rig does not expose a frame every time the browser paints. **Camera
+frame rate** sets how often the stereo pair actually captures, from 1 to 60 fps,
+and the pipeline enforces it in simulated time rather than wall-clock time, so a
+capped rig behaves the same whatever the render loop is doing.
+
+On a frame between exposures the rig contributes nothing: no detection, no pose
+estimate, no overlay publication. The thrown pucks keep sampling and the motion
+filter keeps running, so a radar-backed track keeps being corrected while a
+stereo-only track runs on its constant-velocity prediction until the next
+exposure. A rig that has not looked yet has not lost anyone, so such a track
+carries the observers of its last exposure and is only marked coasting once the
+rig misses an exposure it owed. That is the trade the slider exists to show —
+drop to a few frames a second and watch tracks lag their bodies, skeleton
+overlays age, and clearances lapse sooner.
+
+**CAMERA FPS** in the Stereo rig telemetry panel reports the rate the rig is
+*achieving*, measured over the last second of exposures, not the rate requested.
+It turns amber when the achieved rate falls meaningfully short of the slider,
+which is how a browser that cannot keep up announces itself.
+
+```js
+const pipeline = new StereoVisionPipeline({ fps: 30 });
+const { captured, captureRate } = pipeline.update(world, world.time * 1000);
+```
+
+`fps: 0`, `null` or an omitted value leaves the rig uncapped, exposing on every
+update. `configure({ fps })` retimes the rig without disturbing its optics or
+dropping live tracks.
+
 ## Using it
 
 ```js
@@ -117,6 +148,7 @@ const contacts = visibleTo(world, "P2", trackObservations(tracks, vision), true)
 | Stereo baseline | Lens separation, 2–30 cm. Wider triangulates further and more precisely |
 | Camera field of view | Horizontal FOV; widening it shortens focal length and range |
 | Camera range | Operator cutoff, applied on top of the optical limit |
+| Camera frame rate | Stereo capture rate, 1–60 fps; between exposures stereo tracks coast |
 | Movement trails | Show each track's recent filtered path |
 | Velocity vectors | Show the heading arrow for moving targets |
 | Skeleton overlay | Draw the published 18-joint pose for each resolved subject |

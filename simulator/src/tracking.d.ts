@@ -15,6 +15,8 @@ export interface Measurement {
   officerId?: string;
   confidence?: number;
   outline?: object;
+  /** Which sensor modality produced the report; defaults to `"stereo"`. */
+  source?: string;
 }
 export interface TrailPoint extends Vec3 {
   /** Milliseconds. */
@@ -38,8 +40,10 @@ export interface MotionTrack {
   confidence: number;
   /** Timestamp of the most recent correction, milliseconds. */
   timestamp: number;
-  /** Officers that contributed a measurement on the latest update. */
+  /** Officers and sensors that contributed a measurement on the latest update. */
   observers: string[];
+  /** Sensor modalities behind the latest correction, e.g. `["mmwave", "stereo"]`. */
+  sources: string[];
   outline?: object;
   /** Oldest-first recent filtered positions for the movement trail. */
   trail: TrailPoint[];
