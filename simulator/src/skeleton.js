@@ -146,11 +146,9 @@ export function poseSkeleton(state, options = {}) {
   const joints = points.map((point) => {
     point.y += bob;
     const rotated = rotateHeading(point, heading);
-    // With a nominal +z viewer, the negative-depth side is hidden only when the body is side-on.
-    const sideOn = Math.abs(Math.cos(heading)) > 0.35;
-    const occluded = sideOn && Math.abs(point.x) > 0.001 && rotated.z < -0.001;
-    const score = occluded ? clamp(values.occludedScore, 0, 1) : clamp(values.jointScore + (random() - 0.5) * 0.04, 0, 1);
-    return { name: point.name, index: point.index, x: root.x + rotated.x, y: root.y + rotated.y, z: root.z + rotated.z, score, visible: !occluded };
+    // Camera-specific visibility is decided by the observing rig, not this model.
+    const score = clamp(values.jointScore + (random() - 0.5) * 0.04, 0, 1);
+    return { name: point.name, index: point.index, x: root.x + rotated.x, y: root.y + rotated.y, z: root.z + rotated.z, score, visible: true };
   });
   return {
     trackId, timestamp, root, heading, height: values.height, speed, phase, joints,
@@ -170,20 +168,29 @@ export class SkeletonPoser {
     const result = [];
     for (const state of Array.isArray(tracks) ? tracks : []) {
       const trackId = typeof state?.trackId === "string" ? state.trackId : "";
-      let track = this.tracks.get(trackId);
+      const observerId = typeof state?.officerId === "string" ? state.officerId : "";
+      const key = observerId ? `${observerId}\u0000${trackId}` : trackId;
+      let track = this.tracks.get(key);
       if (!track) track = { phase: 0, lastTimestamp: now, lastSeen: now };
       const dt = clamp((now - track.lastTimestamp) / 1000, 0, 0.25);
       const speed = Math.max(0, valueOr(state?.speed, 0));
       track.phase += 2 * Math.PI * speed * dt / this.options.strideLength;
       track.lastTimestamp = now;
       track.lastSeen = now;
-      this.tracks.set(trackId, track);
+      this.tracks.set(key, track);
       result.push(poseSkeleton({ ...state, timestamp: now, phase: track.phase }, this.options));
     }
     return result;
   }
 
-  phaseOf(trackId) { return this.tracks.get(trackId)?.phase ?? 0; }
+  phaseOf(trackId, officerId) {
+    const key = officerId ? `${officerId}\u0000${trackId}` : trackId;
+    if (this.tracks.has(key)) return this.tracks.get(key).phase;
+    if (!officerId) {
+      for (const [stored, track] of this.tracks) if (stored.endsWith(`\u0000${trackId}`)) return track.phase;
+    }
+    return 0;
+  }
 
   reset() { this.tracks.clear(); }
 }

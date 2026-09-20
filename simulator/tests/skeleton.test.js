@@ -83,6 +83,15 @@ test("SkeletonPoser drops tracks absent for over five seconds", () => {
   assert.equal(poser.phaseOf("target"), 0);
 });
 
+test("SkeletonPoser keeps gait phase independently for each observing officer", () => {
+  const poser = new SkeletonPoser({ height: 10, strideLength: 10 });
+  poser.pose([state({ officerId: "P1", speed: 5 }), state({ officerId: "P2", speed: 2 })], 0);
+  poser.pose([state({ officerId: "P1", speed: 5 }), state({ officerId: "P2", speed: 2 })], 1000);
+  assert.ok(Math.abs(poser.phaseOf("target", "P1") - Math.PI / 4) < 1e-12);
+  assert.ok(Math.abs(poser.phaseOf("target", "P2") - Math.PI / 10) < 1e-12);
+  assert.equal(poser.phaseOf("target"), Math.PI / 4);
+});
+
 test("scores are deterministic for identical inputs", () => {
   const first = poseSkeleton(state({ heading: Math.PI / 2, speed: 6, phase: 1 }), { seed: 22 });
   const second = poseSkeleton(state({ heading: Math.PI / 2, speed: 6, phase: 1 }), { seed: 22 });

@@ -32,7 +32,7 @@ export interface StereoDetection {
   pixels: { uLeft: number; uRight: number; v: number; heightPx: number; widthPx: number };
   outline: { type: "capsule"; height: number; radius: number };
   sensor: { kind: "stereo-camera"; id: string };
-  /** Pose estimated from this detection, in simulation units. */
+  /** Pose reconstructed from this camera detection, in simulation units. */
   skeleton?: Skeleton;
 }
 export interface VisionOptions {

@@ -12,6 +12,7 @@ import {
   trackObservations,
 } from "../src/vision.js";
 import { detectorInput } from "../src/overlay.js";
+import { BONES, restPose } from "../src/skeleton.js";
 
 function scene(officers, targets, walls = []) {
   return { time: 0, officers, targets, walls };
@@ -121,6 +122,101 @@ test("a pipeline publishes one skeleton frame for every observing officer", () =
   assert.equal(frame.skeletons.length, 2);
   assert.deepEqual(frame.skeletons.map((item) => item.publisherId).sort(), ["P1", "P2"]);
   assert.ok(frame.detections.every((detection) => detection.skeleton?.trackId === detection.trackId));
+});
+
+test("a radar-only track never publishes a skeleton", () => {
+  const pipeline = new StereoVisionPipeline({ noise: false });
+  pipeline.radarFrame = (_world, timestamp) => ({
+    sensors: [], tracks: [], returns: 0,
+    measurements: [{
+      trackId: "R1", position: { x: 100, y: 0, z: 0 }, sigma: 1,
+      timestamp, confidence: 0.9, officerId: "M1", source: "mmwave",
+    }],
+  });
+  const frame = pipeline.update(scene([], []), 100);
+  assert.equal(frame.tracks.length, 1);
+  assert.deepEqual(frame.detections, []);
+  assert.deepEqual(frame.skeletons, []);
+});
+
+test("a wall that blocks an individual joint marks only that camera pose joint invisible", () => {
+  const world = scene(
+    [officer("P1", 0, 0)], [target("T1", 120, 0)],
+    [{ x: 58, y: 1, w: 4, h: 3 }],
+  );
+  const frame = new StereoVisionPipeline({ noise: false }).update(world, 100);
+  assert.equal(frame.detections.length, 1, "the body centre remains visible to the detector");
+  assert.ok(frame.detections[0].skeleton.joints.some((joint) => !joint.visible && joint.score === 0));
+});
+
+test("joint reconstruction uncertainty and confidence degrade with camera distance", () => {
+  const near = new StereoVisionPipeline({ seed: 9 }).update(scene([officer("P1", 0, 0)], [target("T1", 100, 0)]), 100);
+  const far = new StereoVisionPipeline({ seed: 9 }).update(scene([officer("P1", 0, 0)], [target("T1", 350, 0)]), 100);
+  const cleanNear = new StereoVisionPipeline({ noise: false }).update(scene([officer("P1", 0, 0)], [target("T1", 100, 0)]), 100);
+  const cleanFar = new StereoVisionPipeline({ noise: false }).update(scene([officer("P1", 0, 0)], [target("T1", 350, 0)]), 100);
+  const nearJoint = near.detections[0].skeleton.joints.find((joint) => joint.visible);
+  const farJoint = far.detections[0].skeleton.joints.find((joint) => joint.visible);
+  const jointError = (noisy, clean) => noisy.joints.reduce((sum, joint, index) => sum
+    + Math.hypot(joint.x - clean.joints[index].x, joint.y - clean.joints[index].y, joint.z - clean.joints[index].z), 0) / noisy.joints.length;
+  assert.ok(farJoint.sigma > nearJoint.sigma);
+  assert.ok(jointError(far.detections[0].skeleton, cleanFar.detections[0].skeleton)
+    > jointError(near.detections[0].skeleton, cleanNear.detections[0].skeleton));
+  assert.ok(far.detections[0].skeleton.confidence < near.detections[0].skeleton.confidence);
+  assert.ok(near.detections[0].skeleton.confidence > 0.8);
+});
+
+test("camera poses keep anatomy rigid while range still lowers confidence", () => {
+  const options = { seed: 7, range: 420, fov: 117 * Math.PI / 180 };
+  const rest = restPose(42);
+  const restLengths = BONES.map(({ a, b }) => Math.hypot(
+    rest[a].x - rest[b].x, rest[a].y - rest[b].y, rest[a].z - rest[b].z,
+  ));
+  const measure = (range) => new StereoVisionPipeline(options).update(
+    scene([officer("P1", 0, 0)], [target("T1", range, 0)]), 100,
+  ).detections[0].skeleton;
+  const near = measure(100);
+  const far = measure(420);
+  for (const skeleton of [near, far]) {
+    const xs = skeleton.joints.map((joint) => joint.x);
+    const ys = skeleton.joints.map((joint) => joint.y);
+    const height = Math.max(...ys) - Math.min(...ys);
+    const width = Math.max(...xs) - Math.min(...xs);
+    assert.ok(height >= 42 * 0.75 && height <= 42 * 1.25);
+    assert.ok(width <= height / 2);
+    for (let index = 0; index < BONES.length; index += 1) {
+      const { a, b } = BONES[index];
+      const length = Math.hypot(
+        skeleton.joints[a].x - skeleton.joints[b].x,
+        skeleton.joints[a].y - skeleton.joints[b].y,
+        skeleton.joints[a].z - skeleton.joints[b].z,
+      );
+      assert.ok(length >= restLengths[index] * 0.7 && length <= restLengths[index] * 1.3);
+    }
+  }
+  const errorFromClean = (range, noisy) => {
+    const clean = new StereoVisionPipeline({ ...options, noise: false }).update(
+      scene([officer("P1", 0, 0)], [target("T1", range, 0)]), 100,
+    ).detections[0].skeleton;
+    return noisy.joints.reduce((sum, joint, index) => sum + Math.hypot(
+      joint.x - clean.joints[index].x,
+      joint.y - clean.joints[index].y,
+      joint.z - clean.joints[index].z,
+    ), 0) / noisy.joints.length;
+  };
+  assert.ok(errorFromClean(420, far) > errorFromClean(100, near));
+  assert.ok(far.confidence < near.confidence);
+});
+
+test("camera poses retain gait phase independently and continuously per observer", () => {
+  const world = sharedScene();
+  const pipeline = new StereoVisionPipeline({ noise: false });
+  pipeline.update(world, 0);
+  world.targets[0].x += 40;
+  const frame = pipeline.update(world, 1000);
+  const phases = new Map(frame.detections.map((detection) => [detection.officerId, detection.skeleton.phase]));
+  assert.ok(phases.get("P1") > 0 && phases.get("P2") > 0);
+  assert.equal(phases.get("P1"), pipeline.poser.phaseOf("T1", "P1"));
+  assert.equal(phases.get("P2"), pipeline.poser.phaseOf("T1", "P2"));
 });
 
 test("published skeleton frames are synthetic overlay layers", () => {

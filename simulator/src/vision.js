@@ -9,7 +9,16 @@ import {
 } from "./mmwave.js";
 import { OverlayBus, composeFeed, detectorInput, publishSkeleton } from "./overlay.js";
 import { SkeletonPoser } from "./skeleton.js";
-import { createGaussian, createStereoRig, observePoint } from "./stereo.js";
+import {
+  backProject,
+  createGaussian,
+  createStereoRig,
+  depthToDisparity,
+  inFrame,
+  observePoint,
+  projectPoint,
+  worldToRig,
+} from "./stereo.js";
 import { MotionTracker } from "./tracking.js";
 
 export const UNITS_PER_METRE = 24;
@@ -51,6 +60,79 @@ export function effectiveRange(rig, range) {
 
 export function occluded(from, to, walls) {
   return segmentBlocked(from, to, walls);
+}
+
+function vector(from, to) {
+  return { x: to.x - from.x, z: to.z - from.z };
+}
+
+function normalize(vector) {
+  const length = Math.hypot(vector.x, vector.z);
+  return length > 1e-6 ? { x: vector.x / length, z: vector.z / length } : { x: 0, z: 0 };
+}
+
+function cameraSkeleton(model, detection, officer, rig, walls, random) {
+  const pose = officerPose(officer, rig);
+  const byName = Object.fromEntries(model.joints.map((joint) => [joint.name, joint]));
+  const torso = {
+    x: (byName.rHip.x + byName.lHip.x + byName.rShoulder.x + byName.lShoulder.x) / 4,
+    y: (byName.rHip.y + byName.lHip.y + byName.rShoulder.y + byName.lShoulder.y) / 4,
+    z: (byName.rHip.z + byName.lHip.z + byName.rShoulder.z + byName.lShoulder.z) / 4,
+  };
+  const lateral = normalize(vector(byName.rShoulder, byName.lShoulder));
+  const bearing = normalize({ x: unitsToMetres(officer.x) - unitsToMetres(torso.x), z: unitsToMetres(officer.y) - unitsToMetres(torso.z) });
+  const sideOn = Math.abs(lateral.x * bearing.x + lateral.z * bearing.z) > 0.35;
+  const joints = model.joints.map((joint) => {
+    const point = { x: unitsToMetres(joint.x), y: unitsToMetres(joint.y), z: unitsToMetres(joint.z) };
+    // Each landmark remains a camera measurement, while the detection that
+    // rooted this model supplies the one shared triangulation displacement.
+    const rigPoint = worldToRig(point, pose);
+    const projection = projectPoint(rigPoint, rig);
+    const measured = observePoint(point, pose, rig, {
+      height: TARGET_HEIGHT_METRES,
+      width: 0.55,
+    });
+    if (!projection || !measured) return { ...joint, score: 0, visible: false };
+    // A keypoint's two image centroids may wander together by a few pixels;
+    // changing their disparity here would falsely give every limb its own range.
+    const keypointNoisePx = Math.min(0.1, rig.centroidNoisePx);
+    const localized = random ? {
+      ...measured,
+      uLeft: measured.uLeft + random() * keypointNoisePx,
+      v: measured.v + random() * keypointNoisePx,
+    } : measured;
+    localized.uRight = localized.uLeft - localized.disparity;
+    const reconstructed = backProject(localized, pose, rig);
+    const physicalDisparity = depthToDisparity(projection.depth, rig);
+    const framed = inFrame(localized, rig);
+    const jointBearing = vector(torso, joint);
+    const farSide = sideOn && jointBearing.x * bearing.x + jointBearing.z * bearing.z < -0.015;
+    const behindWall = occluded(officer, { x: metresToUnits(point.x), y: metresToUnits(point.z) }, walls);
+    const visible = framed && measured.disparity >= rig.minDisparityPx && physicalDisparity >= rig.minDisparityPx
+      && !farSide && !behindWall;
+    const apparentHeight = TARGET_HEIGHT_METRES * rig.focalPx / localized.depth;
+    const score = visible ? Math.min(1, rig.detectorConfidence
+      * Math.sqrt(Math.min(1, apparentHeight / (rig.minBoxHeightPx * 2)))
+      * (0.5 + 0.5 * Math.min(1, localized.disparity / (rig.minDisparityPx * 4)))) : 0;
+    return {
+      ...joint,
+      x: metresToUnits(reconstructed.x),
+      y: metresToUnits(reconstructed.y),
+      z: metresToUnits(reconstructed.z),
+      score,
+      visible,
+      depth: localized.depth,
+      disparity: localized.disparity,
+      // This is shared body-position uncertainty, not eighteen fake fixes.
+      sigma: detection.sigma,
+    };
+  });
+  return {
+    ...model,
+    officerId: detection.officerId,
+    joints,
+    confidence: joints.reduce((sum, joint) => sum + joint.score, 0) / joints.length,
+  };
 }
 
 /** Marker detection runs far slower than the 60 Hz render loop. */
@@ -266,15 +348,33 @@ export class StereoVisionPipeline {
     const radar = this.radarFrame(world, timestamp, this.tracker.snapshot());
     measurements.push(...radar.measurements);
     const tracks = this.tracker.update(measurements, timestamp);
-    const posed = this.options.poses === false ? new Map() : new Map(this.poser.pose(tracks.map((track) => ({
-      trackId: track.trackId,
-      position: { x: track.position.x, y: 0, z: track.position.z },
-      heading: track.heading,
-      speed: track.speed,
-    })), timestamp).map((skeleton) => [skeleton.trackId, skeleton]));
-    for (const detection of detections) {
-      const skeleton = posed.get(detection.trackId);
-      if (skeleton) detection.skeleton = skeleton;
+    if (this.options.poses !== false) {
+      const tracksById = new Map(tracks.map((track) => [track.trackId, track]));
+      const officersById = new Map(world.officers.map((officer) => [officer.id, officer]));
+      const models = this.poser.pose(detections.map((detection) => {
+        const track = tracksById.get(detection.trackId);
+        return {
+          trackId: detection.trackId,
+          officerId: detection.officerId,
+          // The detection fixes the body in this observer's camera frame;
+          // the fused track supplies only motion for the articulated gait.
+          // The detector's 3D centroid is the common-mode pose measurement.
+          // Its centre is half a standing body above the ground root.
+          position: {
+            x: detection.position.x,
+            y: metresToUnits(detection.position.y) - TARGET_HEIGHT_UNITS / 2,
+            z: detection.position.z,
+          },
+          heading: track?.heading ?? 0,
+          speed: track?.speed ?? 0,
+        };
+      }), timestamp);
+      for (let index = 0; index < detections.length; index += 1) {
+        const officer = officersById.get(detections[index].officerId);
+        if (officer) detections[index].skeleton = cameraSkeleton(
+          models[index], detections[index], officer, this.rig, world.walls, this.random,
+        );
+      }
     }
     const skeletons = this.options.poses === false ? [] : detections.flatMap((detection) => {
       const skeleton = detection.skeleton;

@@ -39,11 +39,18 @@ export interface Joint {
   z: number;
   /** Per-joint detector score in [0, 1]. */
   score: number;
-  /** False when the joint sits behind the subject's own torso from the viewer. */
+  /** False when this observer could not measure the joint. */
   visible: boolean;
+  /** Stereo depth and disparity when this joint was camera-measured. */
+  depth?: number;
+  disparity?: number;
+  /** Shared body-position reconstruction error, in the joint's unit. */
+  sigma?: number;
 }
 export interface Skeleton {
   trackId: string;
+  /** Officer whose rig measured this pose, when camera-derived. */
+  officerId?: string;
   /** Milliseconds. */
   timestamp: number;
   /** Ground contact point the joints are posed around. */
@@ -90,6 +97,7 @@ export function poseSkeleton(
     speed?: number;
     timestamp?: number;
     phase?: number;
+    officerId?: string;
   },
   options?: SkeletonOptions,
 ): Skeleton;
@@ -103,11 +111,12 @@ export class SkeletonPoser {
       position: { x: number; y?: number; z: number };
       heading?: number;
       speed?: number;
+      officerId?: string;
     }>,
     timestamp: number,
   ): Skeleton[];
-  /** Current phase for a track, or 0 when unknown. */
-  phaseOf(trackId: string): number;
+  /** Current phase for a track and optional observing officer, or 0 when unknown. */
+  phaseOf(trackId: string, officerId?: string): number;
   reset(): void;
 }
 /** Look one joint up by name. */
