@@ -2,6 +2,15 @@
 import { KinematicPhysicsAdapter, WORLD_DEPTH, WORLD_WIDTH, moveKinematic } from "./physics.js";
 export const WIDTH = WORLD_WIDTH;
 export const HEIGHT = WORLD_DEPTH;
+/** Pucks an officer carries. A thrown sensor stays in the world until recalled. */
+export const MAX_SENSORS = 4;
+const SENSOR_RADIUS = 5;
+const THROW_SPEED = 260;
+const THROW_LIFT = 150;
+const GRAVITY = 235;
+const AIR_DRAG = 0.72;
+const BOUNCE = 0.34;
+const RESTING_SPEED = 9;
 const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
 const angleDifference = (a, b) => Math.atan2(Math.sin(a - b), Math.cos(a - b));
 
@@ -33,11 +42,15 @@ export function createWorld(count = 7) {
       angle,
       radius: 13,
     })),
+    // `hostile` is lab ground truth only. No sensor, track or officer-facing
+    // projection may read it: the system flags every detected body, and an
+    // officer has to clear the bystanders by hand.
     targets: [
-      { id: "T1", x: 380, y: 210, z: 210, angle: 0.35, radius: 12 },
-      { id: "T2", x: 850, y: 160, z: 160, angle: 1.2, radius: 12 },
-      { id: "T3", x: 400, y: 540, z: 540, angle: -0.6, radius: 12 },
+      { id: "T1", x: 380, y: 210, z: 210, angle: 0.35, radius: 12, hostile: true },
+      { id: "T2", x: 850, y: 160, z: 160, angle: 1.2, radius: 12, hostile: false },
+      { id: "T3", x: 400, y: 540, z: 540, angle: -0.6, radius: 12, hostile: false },
     ],
+    sensors: [],
     walls: [
       { x: 100, y: 320, w: 800, h: 22 },
       { x: 535, y: 65, w: 20, h: 175 },
@@ -109,6 +122,19 @@ export function observe(world, { range = 420, fov = Math.PI * 0.65 } = {}) {
   return observations;
 }
 
+/**
+ * A track reported by a puck this officer threw is their own measurement, not a
+ * teammate's, so it survives with shared vision switched off. Sensor ownership
+ * travels with the observation array, beside its vision settings.
+ */
+function ownsObservation(observation, officerId, observations) {
+  if (observation.observers.includes(officerId)) return true;
+  const sensors = observations.sensors ?? [];
+  return observation.observers.some((observer) =>
+    sensors.some((sensor) => sensor.id === observer && sensor.ownerId === officerId),
+  );
+}
+
 export function visibleTo(world, officerId, observations, sharing = true) {
   const officer = world.officers.find((item) => item.id === officerId);
   if (!officer) return [];
@@ -116,7 +142,7 @@ export function visibleTo(world, officerId, observations, sharing = true) {
   return observations.flatMap((observation) => {
     // A live teammate measurement has no receiving camera distance limit.
     if (!inView(officer, observation, Infinity, fov)) return [];
-    const direct = observation.observers.includes(officerId);
+    const direct = ownsObservation(observation, officerId, observations);
     return direct || sharing
       ? [{ ...observation, kind: direct ? "direct" : "shared" }]
       : [];
@@ -132,11 +158,77 @@ export function visibleTo(world, officerId, observations, sharing = true) {
 export function awareOf(world, officerId, observations, sharing = true) {
   if (!world.officers.some((item) => item.id === officerId)) return [];
   return observations.flatMap((observation) => {
-    const direct = observation.observers.includes(officerId);
+    const direct = ownsObservation(observation, officerId, observations);
     return direct || sharing
       ? [{ ...observation, kind: direct ? "direct" : "shared" }]
       : [];
   });
+}
+
+/**
+ * Throw an mmWave puck along the officer's heading. It leaves their hand at eye
+ * height, arcs, bounces off walls and settles wherever it stops — nobody,
+ * including the puck, knows where that is until a stereo camera fixes it.
+ */
+export function throwSensor(world, officerId, { timestamp = world.time * 1000, speed = THROW_SPEED, lift = THROW_LIFT } = {}) {
+  const officer = world.officers.find((item) => item.id === officerId);
+  if (!officer) return null;
+  world.sensors ??= [];
+  if (world.sensors.length >= MAX_SENSORS) return null;
+  const serial = world.sensors.reduce((highest, sensor) => Math.max(highest, Number(sensor.id.slice(1)) || 0), 0) + 1;
+  const push = officer.radius + SENSOR_RADIUS + 1;
+  const sensor = {
+    id: `M${serial}`,
+    ownerId: officerId,
+    x: officer.x + Math.cos(officer.angle) * push,
+    y: officer.y + Math.sin(officer.angle) * push,
+    z: officer.y + Math.sin(officer.angle) * push,
+    angle: officer.angle,
+    radius: SENSOR_RADIUS,
+    height: 40.8, // eye height in world units: the puck leaves the hand, not the floor
+    vx: Math.cos(officer.angle) * speed,
+    vy: Math.sin(officer.angle) * speed,
+    vz: lift,
+    spin: 5.4,
+    state: "flight",
+    thrownAt: timestamp,
+    settledAt: null,
+  };
+  world.sensors.push(sensor);
+  return sensor;
+}
+
+export function recallSensor(world, sensorId) {
+  const index = world.sensors?.findIndex((sensor) => sensor.id === sensorId) ?? -1;
+  if (index < 0) return null;
+  return world.sensors.splice(index, 1)[0];
+}
+
+/** Ballistic flight with drag, wall bounces and a resting threshold. */
+function flySensor(sensor, dt, physics) {
+  sensor.vz -= GRAVITY * dt;
+  sensor.height += sensor.vz * dt;
+  sensor.angle = angleDifference(sensor.angle + sensor.spin * dt, 0);
+  const result = physics.moveKinematic(sensor, sensor.vx * dt, sensor.vy * dt);
+  if (result.blockedX) sensor.vx = -sensor.vx * BOUNCE;
+  if (result.blockedY) sensor.vy = -sensor.vy * BOUNCE;
+  if (sensor.height <= SENSOR_RADIUS) {
+    sensor.height = SENSOR_RADIUS;
+    sensor.vz = Math.abs(sensor.vz) > 40 ? Math.abs(sensor.vz) * BOUNCE : 0;
+    sensor.vx *= 1 - AIR_DRAG * dt * 3;
+    sensor.vy *= 1 - AIR_DRAG * dt * 3;
+    sensor.spin *= 1 - AIR_DRAG * dt * 3;
+  } else {
+    sensor.vx *= 1 - AIR_DRAG * dt;
+    sensor.vy *= 1 - AIR_DRAG * dt;
+  }
+  sensor.z = sensor.y;
+  if (sensor.height <= SENSOR_RADIUS && sensor.vz === 0 && Math.hypot(sensor.vx, sensor.vy) < RESTING_SPEED) {
+    sensor.vx = 0;
+    sensor.vy = 0;
+    sensor.spin = 0;
+    sensor.state = "settled";
+  }
 }
 
 /** @deprecated Use KinematicPhysicsAdapter; retained for compatible consumers. */
@@ -175,6 +267,8 @@ export function stepWorld(
   const tick = dt / steps;
   const others = [...world.officers, ...world.targets];
   const physics = new KinematicPhysicsAdapter({ walls: world.walls, bodies: others });
+  // A thrown puck is small enough to skitter past people; only walls stop it.
+  const sensorPhysics = new KinematicPhysicsAdapter({ walls: world.walls, bodies: [] });
   const selected = world.officers.find((officer) => officer.id === selectedId);
   moveX = Number.isFinite(moveX) ? moveX : 0;
   moveY = Number.isFinite(moveY) ? moveY : 0;
@@ -216,6 +310,12 @@ export function stepWorld(
     }
     for (const target of world.targets)
       patrol(target, 44, tick, physics);
+    for (const sensor of world.sensors ?? []) {
+      if (sensor.state !== "flight") continue;
+      flySensor(sensor, tick, sensorPhysics);
+      if (sensor.state === "settled" && sensor.settledAt === null)
+        sensor.settledAt = (world.time + tick) * 1000;
+    }
     for (const agent of others) agent.z = agent.y;
     world.time += tick;
   }

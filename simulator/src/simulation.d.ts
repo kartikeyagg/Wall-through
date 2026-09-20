@@ -1,5 +1,7 @@
 export const WIDTH: number;
 export const HEIGHT: number;
+/** How many pucks the team may have deployed at once. */
+export const MAX_SENSORS: number;
 export interface Point {
   x: number;
   y: number;
@@ -15,10 +17,33 @@ export interface Wall extends Point {
   w: number;
   h: number;
 }
+export interface Target extends Agent {
+  /** Lab ground truth. Never read by sensors, tracks or anything officer-facing. */
+  hostile?: boolean;
+}
+/** A thrown mmWave puck. Its own position is unknown until stereo fixes it. */
+export interface DeployedSensor extends Agent {
+  /** Officer who threw it. */
+  ownerId: string;
+  /** Height above the floor in world units. */
+  height: number;
+  vx: number;
+  vy: number;
+  /** Vertical velocity in world units per second. */
+  vz: number;
+  /** Tumble rate in radians per second while airborne. */
+  spin: number;
+  state: "flight" | "settled";
+  /** Milliseconds. */
+  thrownAt: number;
+  /** Milliseconds, or null while still airborne. */
+  settledAt: number | null;
+}
 export interface World {
   officers: Agent[];
-  targets: Agent[];
+  targets: Target[];
   walls: Wall[];
+  sensors: DeployedSensor[];
   time: number;
 }
 export interface Observation extends Point {
@@ -69,6 +94,17 @@ export function awareOf<T extends Observation>(
   observations: T[],
   sharing?: boolean,
 ): Array<T & { kind: "direct" | "shared" }>;
+/**
+ * Throw a puck along the officer's heading. Returns the new sensor, or null if
+ * the officer is unknown or the team already has `MAX_SENSORS` deployed.
+ */
+export function throwSensor(
+  world: World,
+  officerId: string,
+  options?: { timestamp?: number; speed?: number; lift?: number },
+): DeployedSensor | null;
+/** Pick a deployed puck back up; returns it, or null when the id is unknown. */
+export function recallSensor(world: World, sensorId: string): DeployedSensor | null;
 export function canSee(
   observer: Point & { angle: number },
   target: Point,

@@ -26,7 +26,9 @@ export function fuseMeasurements(reports) {
   let combinedMiss = 1;
   let latest = usable[0];
   let mostConfident = usable[0];
+  const sources = new Set();
   for (const report of usable) {
+    sources.add(typeof report.source === "string" ? report.source : "stereo");
     const weight = 1 / measurementSigma(report) ** 2;
     totalWeight += weight;
     for (const axis of AXES) position[axis] += report.position[axis] * weight;
@@ -44,6 +46,7 @@ export function fuseMeasurements(reports) {
     officerId: mostConfident.officerId,
     confidence: clamp(1 - combinedMiss, 0, 1),
     outline: mostConfident.outline,
+    sources: [...sources].sort(),
   };
 }
 
@@ -112,6 +115,7 @@ export class MotionTracker {
         track.baseConfidence = fused.confidence;
         track.outline = fused.outline;
         track.observers = [...new Set(reports.map((report) => report.officerId).filter((id) => id != null))].sort();
+        track.sources = fused.sources;
         track.missedMs = 0;
         track.coasting = false;
         grouped.delete(track.trackId);
@@ -136,6 +140,7 @@ export class MotionTracker {
         baseConfidence: fused.confidence,
         outline: fused.outline,
         observers: [...new Set(reports.map((report) => report.officerId).filter((id) => id != null))].sort(),
+        sources: fused.sources,
         missedMs: 0,
         coasting: false,
         moving: false,
@@ -187,7 +192,7 @@ export class MotionTracker {
       trackId: track.trackId,
       position: { ...track.position }, velocity: { ...track.velocity }, speed: track.speed, heading: track.heading,
       moving: track.moving, sigma: track.sigma, confidence: track.confidence, timestamp: track.timestamp,
-      observers: [...track.observers], outline: track.outline, trail: track.trail.map((point) => ({ ...point })),
+      observers: [...track.observers], sources: [...track.sources], outline: track.outline, trail: track.trail.map((point) => ({ ...point })),
       predicted: { ...track.predicted }, missedMs: track.missedMs, age: track.age, coasting: track.coasting,
     }));
   }
