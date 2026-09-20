@@ -17,6 +17,17 @@ export interface Wall extends Point {
   w: number;
   h: number;
 }
+export interface Landmark extends Point {
+  id: string;
+  kind: "wall-art" | "wall-panel" | "floor-marking" | "fixture";
+  /** Centre height above the floor; floor markings use zero. */
+  height: number;
+  width: number;
+  /** Face direction, or zero for a floor marking. */
+  normal: Point;
+  color: string;
+  strength: number;
+}
 export interface Target extends Agent {
   /** Lab ground truth. Never read by sensors, tracks or anything officer-facing. */
   hostile?: boolean;
@@ -32,7 +43,10 @@ export interface TargetMotion {
   desiredSpeed: number;
   phaseRemaining: number;
   scanDirection: number;
+  scanAngle?: number | null;
   avoidRemaining: number;
+  avoidAngle?: number | null;
+  resumeSpeed?: number;
 }
 /** A thrown mmWave puck. Its own position is unknown until stereo fixes it. */
 export interface DeployedSensor extends Agent {
@@ -56,6 +70,7 @@ export interface World {
   officers: Agent[];
   targets: Target[];
   walls: Wall[];
+  landmarks: Landmark[];
   sensors: DeployedSensor[];
   time: number;
 }
@@ -125,6 +140,12 @@ export function canSee(
   range?: number,
   fov?: number,
 ): boolean;
+/** Static scenery inside range and view, clear of walls and facing the officer. */
+export function visibleLandmarks(
+  world: World,
+  officer: Agent,
+  options?: VisionOptions,
+): Landmark[];
 export function segmentBlocked(
   start: Point,
   end: Point,

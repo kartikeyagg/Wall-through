@@ -6,6 +6,7 @@ import {
   createWorld,
   stepWorld,
   canSee,
+  visibleLandmarks,
   observe,
   visibleTo,
   awareOf,
@@ -311,6 +312,71 @@ const clearOfWalls = (agent, walls) => walls.every((wall) => {
   return Math.hypot(agent.x - x, agent.y - y) >= agent.radius - 1e-7;
 });
 
+test("landmarks are deterministic static scenery with valid placement", () => {
+  const first = createWorld(5);
+  const second = createWorld(10);
+  assert.deepEqual(first.landmarks, second.landmarks);
+  assert.ok(first.landmarks.length >= 20 && first.landmarks.length <= 40);
+  assert.equal(new Set(first.landmarks.map((item) => item.id)).size, first.landmarks.length);
+  first.landmarks.forEach((landmark) => {
+    assert.ok(landmark.x >= 0 && landmark.x <= WIDTH);
+    assert.ok(landmark.y >= 0 && landmark.y <= HEIGHT);
+    assert.ok(landmark.strength >= 0 && landmark.strength <= 1);
+    const floor = landmark.kind === "floor-marking";
+    assert.equal(floor, landmark.normal.x === 0 && landmark.normal.y === 0);
+    if (floor) {
+      assert.equal(landmark.height, 0);
+      assert.equal(first.walls.some((wall) =>
+        landmark.x > wall.x && landmark.x < wall.x + wall.w &&
+        landmark.y > wall.y && landmark.y < wall.y + wall.h), false);
+      return;
+    }
+    near(Math.hypot(landmark.normal.x, landmark.normal.y), 1);
+    assert.ok(first.walls.some((wall) =>
+      (Math.abs(landmark.x - wall.x) < 1e-9 && landmark.normal.x === -1 &&
+        landmark.y >= wall.y && landmark.y <= wall.y + wall.h) ||
+      (Math.abs(landmark.x - (wall.x + wall.w)) < 1e-9 && landmark.normal.x === 1 &&
+        landmark.y >= wall.y && landmark.y <= wall.y + wall.h) ||
+      (Math.abs(landmark.y - wall.y) < 1e-9 && landmark.normal.y === -1 &&
+        landmark.x >= wall.x && landmark.x <= wall.x + wall.w) ||
+      (Math.abs(landmark.y - (wall.y + wall.h)) < 1e-9 && landmark.normal.y === 1 &&
+        landmark.x >= wall.x && landmark.x <= wall.x + wall.w)));
+  });
+});
+
+test("visible landmarks respect range, view, occlusion, and wall face direction", () => {
+  const officer = { id: "P1", x: 0, y: 0, angle: 0, radius: 13 };
+  const floor = { id: "L1", kind: "floor-marking", x: 80, y: 0, height: 0, width: 20,
+    normal: { x: 0, y: 0 }, color: "#ffffff", strength: 1 };
+  const art = { id: "L2", kind: "wall-art", x: 100, y: 0, height: 80, width: 30,
+    normal: { x: -1, y: 0 }, color: "#ff0000", strength: 1 };
+  const world = { ...createWorld(5), officers: [officer], targets: [],
+    walls: [{ x: 100, y: -20, w: 20, h: 40 }], landmarks: [floor, art] };
+  assert.deepEqual(visibleLandmarks(world, officer, { range: 90, fov: Math.PI / 2 })
+    .map((item) => item.id), ["L1"]);
+  assert.deepEqual(visibleLandmarks(world, officer, { range: 200, fov: Math.PI / 2 })
+    .map((item) => item.id), ["L1", "L2"]);
+  officer.angle = Math.PI / 2;
+  assert.deepEqual(visibleLandmarks(world, officer, { range: 200, fov: Math.PI / 2 }), []);
+  officer.angle = 0;
+  world.walls.unshift({ x: 45, y: -15, w: 10, h: 30 });
+  assert.deepEqual(visibleLandmarks(world, officer, { range: 200, fov: Math.PI / 2 }), []);
+  world.walls.shift();
+  officer.x = 140;
+  officer.angle = Math.PI;
+  assert.equal(visibleLandmarks(world, officer, { range: 200, fov: Math.PI / 2 })
+    .some((item) => item.id === "L2"), false, "the back of wall art is not visible");
+});
+
+test("landmarks never become people, observations, or tracks", () => {
+  const world = createWorld(5);
+  const snapshot = observe(world);
+  const landmarkIds = new Set(world.landmarks.map((item) => item.id));
+  assert.equal(snapshot.some((item) => landmarkIds.has(item.targetId)), false);
+  assert.equal(visibleTo(world, "P1", snapshot).some((item) => landmarkIds.has(item.targetId)), false);
+  assert.equal(awareOf(world, "P1", snapshot).some((item) => landmarkIds.has(item.targetId)), false);
+});
+
 test("target locomotion is deterministic, bounded, and clears walls over a long run", () => {
   const first = createWorld(5);
   const second = createWorld(5);
@@ -337,6 +403,71 @@ test("target gait eases through pauses, walks, and hurry stretches", () => {
   assert.ok(Math.max(...speeds) > 45, "a person occasionally hurries");
   for (let index = 1; index < speeds.length; index++)
     assert.ok(Math.abs(speeds[index] - speeds[index - 1]) <= 38 / 60 + 1e-9);
+});
+
+test("target motion has human-scale actual acceleration and modest steering", () => {
+  const world = createWorld(5);
+  let previous = world.targets.map((target) => ({ x: target.x, y: target.y, speed: 0, angle: target.angle }));
+  let peakAcceleration = 0;
+  let totalTurnRate = 0;
+  let samples = 0;
+  for (let frame = 0; frame < 900; frame++) {
+    stepWorld(world, 1 / 60);
+    world.targets.forEach((target, index) => {
+      const before = previous[index];
+      const speed = Math.hypot(target.x - before.x, target.y - before.y) * 60;
+      if (frame) peakAcceleration = Math.max(peakAcceleration, Math.abs(speed - before.speed) * 60);
+      totalTurnRate += Math.abs(angularDelta(target.angle, before.angle)) * 60;
+      samples++;
+      previous[index] = { x: target.x, y: target.y, speed, angle: target.angle };
+    });
+  }
+  assert.ok(peakAcceleration < 200, `peak actual acceleration was ${peakAcceleration}`);
+  assert.ok(totalTurnRate / samples < 0.35, "people mostly walk straight");
+
+  const steering = createWorld(5);
+  steering.officers = [];
+  steering.walls = [];
+  steering.targets = [{ id: "T4", x: 200, y: 200, z: 200, angle: Math.PI / 2, radius: 12,
+    motion: { seed: 4, goalX: 500, goalY: 200, speed: 0, desiredSpeed: 30,
+      resumeSpeed: 30, phaseRemaining: 10, scanDirection: 1, scanAngle: null,
+      avoidRemaining: 0, avoidAngle: null } }];
+  const heading = steering.targets[0].angle;
+  stepWorld(steering, 1);
+  assert.ok(Math.abs(angularDelta(steering.targets[0].angle, heading)) > 0.2,
+    "a target still turns to steer toward its goal");
+});
+
+test("idle glances settle instead of spinning at the turn cap", () => {
+  const world = createWorld(5);
+  world.officers = [];
+  world.walls = [];
+  world.targets = [{ id: "T4", x: 200, y: 200, z: 200, angle: 0, radius: 12,
+    motion: { seed: 4, goalX: 200, goalY: 200, speed: 0, desiredSpeed: 0,
+      resumeSpeed: 0, phaseRemaining: 10, scanDirection: 1, scanAngle: 0.3,
+      avoidRemaining: 0, avoidAngle: null } }];
+  const turnRates = [];
+  for (let frame = 0; frame < 180; frame++) {
+    const before = world.targets[0].angle;
+    stepWorld(world, 1 / 60);
+    turnRates.push(Math.abs(angularDelta(world.targets[0].angle, before)) * 60);
+  }
+  assert.ok(Math.max(...turnRates) <= 0.35 + 1e-9);
+  assert.ok(turnRates.filter((rate) => rate > 1e-8).length < turnRates.length / 2);
+  assert.equal(turnRates.at(-1), 0);
+});
+
+test("each target gets an independent deterministic motion stream", () => {
+  const first = createWorld(5);
+  const second = createWorld(5);
+  assert.equal(new Set(first.targets.map((target) => target.motion.seed)).size, first.targets.length);
+  for (let frame = 0; frame < 600; frame++) {
+    stepWorld(first, 1 / 60);
+    stepWorld(second, 1 / 60);
+  }
+  assert.deepEqual(first.targets, second.targets);
+  assert.notEqual(first.targets[0].motion.seed, first.targets[1].motion.seed);
+  assert.notEqual(first.targets[1].motion.phaseRemaining, first.targets[2].motion.phaseRemaining);
 });
 
 test("target facing turns at a capped rate and follows its travel direction", () => {

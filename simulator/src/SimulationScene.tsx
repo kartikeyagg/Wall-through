@@ -6,7 +6,7 @@ import { BONES, skeletonSegments } from "./skeleton.js";
 import { createStereoRig } from "./stereo.js";
 import type { Skeleton } from "./skeleton.js";
 import type { OverlayLayer } from "./overlay.js";
-import type { World } from "./simulation.js";
+import type { Landmark, World } from "./simulation.js";
 import type { VisionObservation } from "./vision.js";
 
 export type VisionContact = VisionObservation & {
@@ -41,6 +41,8 @@ export type SensorReport = {
 export type SceneOptions = {
   selected: string;
   mode: "overview" | "glasses";
+  /** Capture the mouse in the glasses view to steer the officer, FPS style. */
+  mouseLook: boolean;
   cones: boolean;
   links: boolean;
   sharing: boolean;
@@ -91,6 +93,9 @@ const clearedTintColor = new THREE.Color("#94a3b8");
 const defaultOrbit = { azimuth: Math.atan2(8.5, 11.5), elevation: Math.asin(12.5 / Math.hypot(8.5, 12.5, 11.5)), distance: Math.hypot(8.5, 12.5, 11.5) };
 const orbitLimits = { minElevation: THREE.MathUtils.degToRad(5), maxElevation: THREE.MathUtils.degToRad(89), minDistance: 5, maxDistance: 32 };
 const orbitRadiansPerPixel = 0.006;
+// A conventional FPS turn rate at this rig FOV; pointer-lock deltas are pixels.
+const mouseLookRadiansPerPixel = 0.0018;
+const maxMouseLookDelta = 100;
 // Glasses HUD: one arrow per live contact on a ring around the view centre, pointing at the target's bearing — up is ahead, down is behind.
 const hudDepth = 1, hudRingFraction = 0.62, hudArrowFraction = 0.1;
 const point = (x: number, y: number, height = 0) => new THREE.Vector3((x - 500) * scale, height, (y - 340) * scale);
@@ -231,6 +236,57 @@ function makeEnvironmentTexture(kind: "floor" | "wall") {
   const texture = new THREE.CanvasTexture(canvas), bumpTexture = new THREE.CanvasTexture(relief); texture.colorSpace = THREE.SRGBColorSpace; texture.wrapS = texture.wrapT = bumpTexture.wrapS = bumpTexture.wrapT = THREE.RepeatWrapping; return { texture, bumpTexture };
 }
 
+/** Procedural landmark faces make visual distinctiveness match localization strength. */
+function makeLandmarkTexture(landmark: Landmark) {
+  const canvas = document.createElement("canvas"); canvas.width = canvas.height = 256;
+  const context = canvas.getContext("2d")!;
+  let seed = idHash(landmark.id);
+  const random = () => { seed = Math.imul(seed ^ (seed >>> 15), 2246822519); return (seed >>> 0) / 0x100000000; };
+  const strength = THREE.MathUtils.clamp(landmark.strength, 0, 1), color = new THREE.Color(landmark.color).lerp(new THREE.Color("#687476"), 1 - strength), dark = color.clone().multiplyScalar(0.28 + strength * 0.16), light = color.clone().lerp(new THREE.Color("#d5e2e0"), 0.18 + strength * 0.22);
+  context.clearRect(0, 0, 256, 256);
+  if (landmark.kind === "floor-marking") {
+    context.globalAlpha = 0.26 + strength * 0.46; context.fillStyle = `#${dark.getHexString()}`; context.fillRect(16, 16, 224, 224);
+    context.strokeStyle = `#${light.getHexString()}`; context.lineWidth = 5 + strength * 4;
+    for (let index = -2; index < 5; index++) { context.beginPath(); context.moveTo(index * 64, 256); context.lineTo(index * 64 + 128, 0); context.stroke(); }
+    context.globalAlpha = 1;
+  } else {
+    context.fillStyle = `#${dark.getHexString()}`; context.fillRect(0, 0, 256, 256);
+    context.strokeStyle = "#172226"; context.lineWidth = 12; context.strokeRect(6, 6, 244, 244);
+    if (landmark.kind === "wall-art") {
+      const inset = 30 + Math.floor(random() * 20); context.fillStyle = `#${light.getHexString()}`; context.fillRect(inset, inset, 256 - inset * 2, 256 - inset * 2);
+      context.globalAlpha = 0.3 + strength * 0.6;
+      for (let index = 0; index < 7; index++) { context.fillStyle = index % 2 ? `#${dark.getHexString()}` : "#172226"; context.beginPath(); context.arc(30 + random() * 196, 30 + random() * 196, 12 + random() * 38, 0, Math.PI * 2); context.fill(); }
+      context.globalAlpha = 1;
+    } else {
+      context.strokeStyle = `#${light.getHexString()}`; context.lineWidth = 3 + strength * 3;
+      for (let offset = 32; offset < 256; offset += 48) { context.beginPath(); context.moveTo(offset, 20); context.lineTo(offset, 236); context.moveTo(20, offset); context.lineTo(236, offset); context.stroke(); }
+      const first = 36 + Math.floor(random() * 38), second = 150 + Math.floor(random() * 38); context.fillStyle = `#${light.getHexString()}`; context.fillRect(first, first, 42, 42); context.fillRect(second, second, 42, 42);
+    }
+  }
+  const texture = new THREE.CanvasTexture(canvas); texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+function makeLandmarkVisual(landmark: Landmark) {
+  const width = Math.max(landmark.width * scale, 0.08), strength = THREE.MathUtils.clamp(landmark.strength, 0, 1), tone = new THREE.Color(landmark.color).lerp(new THREE.Color("#566365"), 1 - strength);
+  if (landmark.kind === "fixture") {
+    const group = new THREE.Group(), height = Math.max(landmark.height * scale * 2, width * 0.8, 0.16), material = new THREE.MeshStandardMaterial({ color: tone, roughness: 0.72, metalness: 0.16 + strength * 0.24 }), normal = new THREE.Vector3(landmark.normal.x, 0, landmark.normal.y);
+    const base = new THREE.Mesh(new THREE.CylinderGeometry(width * 0.23, width * 0.28, height * 0.14, 10), material), body = new THREE.Mesh(new THREE.BoxGeometry(width * 0.5, height * 0.7, width * 0.4), material), beacon = new THREE.Mesh(new THREE.CylinderGeometry(width * 0.11, width * 0.11, height * 0.18, 10), new THREE.MeshStandardMaterial({ color: tone.clone().lerp(new THREE.Color("#aab9b7"), 0.25 + strength * 0.35), roughness: 0.45, metalness: 0.36 }));
+    if (normal.lengthSq() > 1e-6) normal.normalize();
+    base.position.y = -height * 0.43; beacon.position.y = height * 0.43; group.add(base, body, beacon); group.position.copy(point(landmark.x, landmark.y, height / 2)).addScaledVector(normal, width * 0.32); group.rotation.y = idHash(landmark.id) * 0.0001;
+    return { object: group, texture: null as THREE.Texture | null };
+  }
+  const texture = makeLandmarkTexture(landmark), material = new THREE.MeshBasicMaterial({ map: texture, transparent: landmark.kind === "floor-marking", opacity: landmark.kind === "floor-marking" ? 0.42 + strength * 0.38 : 1, side: THREE.DoubleSide, depthWrite: landmark.kind !== "floor-marking" });
+  if (landmark.kind === "floor-marking") {
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(width, width), material); mesh.rotation.x = -Math.PI / 2; mesh.position.copy(point(landmark.x, landmark.y, 0.012));
+    return { object: mesh, texture };
+  }
+  const aspect = landmark.kind === "wall-art" ? 0.64 : 0.5, mesh = new THREE.Mesh(new THREE.PlaneGeometry(width, width * aspect), material), normal = new THREE.Vector3(landmark.normal.x, 0, landmark.normal.y);
+  if (normal.lengthSq() < 1e-6) normal.set(0, 0, 1); else normal.normalize();
+  mesh.position.copy(point(landmark.x, landmark.y, landmark.height * scale)).addScaledVector(normal, 0.013); mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal);
+  return { object: mesh, texture };
+}
+
 /** Distance along a map-space ray to the first wall face, or `limit` if nothing is hit. */
 function rayToWalls(x: number, y: number, dx: number, dy: number, walls: World["walls"], limit: number) {
   let nearest = limit;
@@ -343,14 +399,21 @@ export default function SimulationScene({ world, options, contacts, sensors, awa
     const ground = new THREE.Mesh(new THREE.PlaneGeometry(20, 13.6), new THREE.MeshStandardMaterial({ color: "#91a5a4", map: floorSurface.texture, bumpMap: floorSurface.bumpTexture, bumpScale: 0.045, roughness: 0.9, metalness: 0.03 })); ground.rotation.x = -Math.PI / 2; scene.add(ground);
     const grid = new THREE.GridHelper(20, 25, "#293a43", "#1b2a32"); grid.position.y = 0.005; scene.add(grid);
     const people = new Map<string, THREE.Group>(), officerVisuals = new Map<string, OfficerVisual>(), gazeGroup = new THREE.Group(), fields = new Map<string, FieldVisual>(), contactVisuals = new Map<string, ContactVisual>(), directSkeletonVisuals = new Map<string, SkeletonVisual>(), overlaySkeletonVisuals = new Map<string, SkeletonVisual>(), freeOverlaySkeletonVisuals: SkeletonVisual[] = [], linkVisuals = new Map<string, LinkVisual>(), directionArrows = new Map<string, DirectionArrowVisual>(), sensorVisuals = new Map<string, SensorVisual>();
-    const linkGroup = new THREE.Group(), fovGroup = new THREE.Group(), wallGroup = new THREE.Group(), contactGroup = new THREE.Group(), skeletonGroup = new THREE.Group(), sensorGroup = new THREE.Group(); scene.add(linkGroup, fovGroup, wallGroup, contactGroup, skeletonGroup, gazeGroup, sensorGroup);
+    const linkGroup = new THREE.Group(), fovGroup = new THREE.Group(), wallGroup = new THREE.Group(), landmarkGroup = new THREE.Group(), contactGroup = new THREE.Group(), skeletonGroup = new THREE.Group(), sensorGroup = new THREE.Group(); scene.add(linkGroup, fovGroup, wallGroup, landmarkGroup, contactGroup, skeletonGroup, gazeGroup, sensorGroup);
+    const landmarkTextures: THREE.Texture[] = []; let landmarksBuilt = false;
     const radarGeometry = new THREE.CircleGeometry(1, 48), radarMaterial = new THREE.MeshBasicMaterial({ color: "#e879f9", transparent: true, opacity: 0.07, side: THREE.DoubleSide, depthWrite: false });
     const emptyDeployedSensors: World["sensors"] = [], emptySensorReports: SensorReport[] = [];
     // The HUD rides on the camera, so it must be in the scene graph for its children to render.
     const hudGroup = new THREE.Group(); hudGroup.position.z = -hudDepth; camera.add(hudGroup); scene.add(camera);
+    const crosshairGeometry = new THREE.BufferGeometry(); crosshairGeometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array([-0.025, 0, 0, -0.008, 0, 0, 0.008, 0, 0, 0.025, 0, 0, 0, -0.025, 0, 0, -0.008, 0, 0, 0.008, 0, 0, 0.025, 0]), 3));
+    const crosshair = new THREE.LineSegments(crosshairGeometry, new THREE.LineBasicMaterial({ color: "#bcf574", transparent: true, opacity: 0.54, depthTest: false, depthWrite: false, fog: false })); crosshair.position.z = -hudDepth; crosshair.renderOrder = 1001; crosshair.visible = false; camera.add(crosshair);
     const raycaster = new THREE.Raycaster(), pointer = new THREE.Vector2(); let lastWorld: World | null = null;
     const clearGroup = (group: THREE.Group) => { for (const child of [...group.children]) { group.remove(child); disposeObject(child); } };
     const disposeSensorVisual = (visual: SensorVisual) => { sensorGroup.remove(visual.group, visual.marker, visual.coverage); disposeObject(visual.group); disposeObject(visual.marker); };
+    const buildLandmarks = (landmarks: readonly Landmark[]) => {
+      for (const landmark of landmarks) { const visual = makeLandmarkVisual(landmark); landmarkGroup.add(visual.object); if (visual.texture) landmarkTextures.push(visual.texture); }
+      landmarksBuilt = true;
+    };
     const rebuild = (w: World) => {
       for (const person of people.values()) { scene.remove(person); disposeObject(person); }
       clearGroup(fovGroup); clearGroup(wallGroup); clearGroup(contactGroup); clearGroup(linkGroup); clearGroup(skeletonGroup); clearGroup(gazeGroup); clearGroup(hudGroup); people.clear(); officerVisuals.clear(); fields.clear(); contactVisuals.clear(); directSkeletonVisuals.clear(); overlaySkeletonVisuals.clear(); freeOverlaySkeletonVisuals.length = 0; linkVisuals.clear(); directionArrows.clear();
@@ -374,15 +437,16 @@ export default function SimulationScene({ world, options, contacts, sensors, awa
       lastWorld = w;
     };
     const resize = () => { const { width, height } = element.getBoundingClientRect(); renderer.setSize(Math.max(width, 1), Math.max(height, 1), false); camera.aspect = Math.max(width, 1) / Math.max(height, 1); camera.updateProjectionMatrix(); };
-    const orbit = { ...defaultOrbit }; let drag: { x: number; y: number } | null = null, pointerLocked = false, lookPitch = 0, shownMode: SceneOptions["mode"] | null = null;
-    const updateLookHint = () => { const hint = lookHint.current; if (!hint) return; const glasses = options.current.mode === "glasses"; hint.hidden = !glasses; hint.classList.toggle("locked", pointerLocked); hint.textContent = pointerLocked ? "LOOK LOCKED · ESC TO RELEASE" : "CLICK TO LOOK · ESC TO RELEASE"; };
-    const pointerLockChange = () => { pointerLocked = document.pointerLockElement === renderer.domElement; if (!pointerLocked) lookPitch = 0; updateLookHint(); };
+    const orbit = { ...defaultOrbit }; let drag: { x: number; y: number } | null = null, pointerLocked = false, lookPitch = 0, shownMode: SceneOptions["mode"] | null = null, shownMouseLook: boolean | null = null;
+    const updateLookHint = () => { const hint = lookHint.current; if (!hint) return; const enabled = options.current.mode === "glasses" && options.current.mouseLook; hint.hidden = !enabled; hint.classList.toggle("locked", pointerLocked); hint.textContent = pointerLocked ? "AIM + CLICK TO TAG · ESC TO RELEASE" : "CLICK EMPTY SPACE TO LOOK"; };
+    const pointerLockChange = () => { pointerLocked = document.pointerLockElement === renderer.domElement; updateLookHint(); };
     const mouseLook = (event: MouseEvent) => {
-      if (!pointerLocked || options.current.mode !== "glasses") return;
+      if (!pointerLocked || options.current.mode !== "glasses" || !options.current.mouseLook) return;
+      const dx = THREE.MathUtils.clamp(event.movementX, -maxMouseLookDelta, maxMouseLookDelta), dy = THREE.MathUtils.clamp(event.movementY, -maxMouseLookDelta, maxMouseLookDelta);
       const officer = world.current?.officers.find((item) => item.id === options.current.selected);
-      if (officer) officer.angle = Math.atan2(Math.sin(officer.angle + event.movementX * 0.0022), Math.cos(officer.angle + event.movementX * 0.0022));
+      if (officer) officer.angle = Math.atan2(Math.sin(officer.angle + dx * mouseLookRadiansPerPixel), Math.cos(officer.angle + dx * mouseLookRadiansPerPixel));
       // Pitch belongs only to the rendered camera: the yaw-only simulation geometry remains authoritative.
-      lookPitch = THREE.MathUtils.clamp(lookPitch - event.movementY * 0.0022, THREE.MathUtils.degToRad(-35), THREE.MathUtils.degToRad(35));
+      lookPitch = THREE.MathUtils.clamp(lookPitch - dy * mouseLookRadiansPerPixel, THREE.MathUtils.degToRad(-35), THREE.MathUtils.degToRad(35));
     };
     const startDrag = (event: PointerEvent) => { drag = { x: event.clientX, y: event.clientY }; renderer.domElement.setPointerCapture(event.pointerId); renderer.domElement.style.cursor = "grabbing"; };
     const moveDrag = (event: PointerEvent) => {
@@ -398,12 +462,20 @@ export default function SimulationScene({ world, options, contacts, sensors, awa
     const endDrag = (event: PointerEvent) => { if (!drag) return; drag = null; if (renderer.domElement.hasPointerCapture(event.pointerId)) renderer.domElement.releasePointerCapture(event.pointerId); renderer.domElement.style.cursor = ""; };
     const zoom = (event: WheelEvent) => { if (!event.ctrlKey || options.current.mode !== "overview") return; event.preventDefault(); orbit.distance = THREE.MathUtils.clamp(orbit.distance * Math.exp(event.deltaY * 0.0015), orbitLimits.minDistance, orbitLimits.maxDistance); };
     const resetView = () => Object.assign(orbit, defaultOrbit);
+    const pick = (event: PointerEvent, fromCrosshair = false) => {
+      const bounds = renderer.domElement.getBoundingClientRect(); pointer.set(fromCrosshair ? 0 : ((event.clientX - bounds.left) / bounds.width) * 2 - 1, fromCrosshair ? 0 : -((event.clientY - bounds.top) / bounds.height) * 2 + 1); raycaster.setFromCamera(pointer, camera);
+      const officerOf = (object: THREE.Object3D | null): string | undefined => object ? object.userData.officerId ?? officerOf(object.parent) : undefined, targetOf = (object: THREE.Object3D | null): string | undefined => object ? object.userData.targetId ?? targetOf(object.parent) : undefined, hit = raycaster.intersectObjects([...people.values()], true)[0];
+      if (!hit) return false;
+      const officerId = officerOf(hit.object), targetId = targetOf(hit.object); if (officerId) onSelect(officerId); else if (targetId) onToggleThreat(targetId);
+      return Boolean(officerId || targetId);
+    };
     const select = (event: PointerEvent) => {
       renderer.domElement.focus();
       if (event.ctrlKey) { startDrag(event); return; }
-      if (options.current.mode === "glasses") { renderer.domElement.requestPointerLock?.(); return; }
-      // Overview clicks are deliberately left as picking: threat correction depends on this raycast.
-      const bounds = renderer.domElement.getBoundingClientRect(); pointer.set(((event.clientX - bounds.left) / bounds.width) * 2 - 1, -((event.clientY - bounds.top) / bounds.height) * 2 + 1); raycaster.setFromCamera(pointer, camera); const officerOf = (object: THREE.Object3D | null): string | undefined => object ? object.userData.officerId ?? officerOf(object.parent) : undefined, targetOf = (object: THREE.Object3D | null): string | undefined => object ? object.userData.targetId ?? targetOf(object.parent) : undefined, hit = raycaster.intersectObjects([...people.values()], true)[0]; if (!hit) return; const officerId = officerOf(hit.object), targetId = targetOf(hit.object); if (officerId) onSelect(officerId); else if (targetId) onToggleThreat(targetId);
+      const glasses = options.current.mode === "glasses", mouseLookEnabled = options.current.mouseLook;
+      if (pointerLocked) { pick(event, true); return; }
+      const hit = pick(event);
+      if (glasses && mouseLookEnabled && !hit) renderer.domElement.requestPointerLock?.();
     };
     const keyDown = (event: KeyboardEvent) => { const key = event.key.toLowerCase(); if (["w", "a", "s", "d", "q", "e", "f", "arrowup", "arrowdown", "arrowleft", "arrowright", " "].includes(key)) { event.preventDefault(); onKeyDown(key, event.repeat); } };
     const keyUp = (event: KeyboardEvent) => onKeyUp(event.key.toLowerCase());
@@ -411,9 +483,13 @@ export default function SimulationScene({ world, options, contacts, sensors, awa
     let frame = 0, pulse = 0;
     const render = () => {
       const w = world.current, settings = options.current;
-      if (settings.mode !== shownMode) { shownMode = settings.mode; updateLookHint(); }
+      if (settings.mode !== shownMode || settings.mouseLook !== shownMouseLook) { shownMode = settings.mode; shownMouseLook = settings.mouseLook; updateLookHint(); }
+      if (!settings.mouseLook && document.pointerLockElement === renderer.domElement) document.exitPointerLock();
+      crosshair.visible = pointerLocked && settings.mode === "glasses" && settings.mouseLook;
       if (w) {
         if (w !== lastWorld || people.size !== w.officers.length + w.targets.length) rebuild(w);
+        const landmarks = (w as World & { landmarks?: Landmark[] }).landmarks;
+        if (!landmarksBuilt && landmarks?.length) buildLandmarks(landmarks);
         const selected = w.officers.find((item) => item.id === settings.selected) ?? w.officers[0]; pulse += 0.045;
         for (const officer of w.officers) {
           const mesh = people.get(officer.id)!, visual = officerVisuals.get(officer.id)!, isSelected = officer.id === selected.id, tone = isSelected ? "#bcf574" : "#76baff"; mesh.position.copy(point(officer.x, officer.y)); mesh.rotation.y = Math.PI / 2 - officer.angle; (visual.body.material as THREE.MeshStandardMaterial).color.set(tone);
@@ -478,7 +554,7 @@ export default function SimulationScene({ world, options, contacts, sensors, awa
       renderer.render(scene, camera); frame = requestAnimationFrame(render);
     };
     frame = requestAnimationFrame(render);
-    return () => { cancelAnimationFrame(frame); observer.disconnect(); if (document.pointerLockElement === renderer.domElement) document.exitPointerLock(); renderer.domElement.removeEventListener("pointerdown", select); renderer.domElement.removeEventListener("pointermove", moveDrag); renderer.domElement.removeEventListener("pointerup", endDrag); renderer.domElement.removeEventListener("pointercancel", endDrag); renderer.domElement.removeEventListener("wheel", zoom); renderer.domElement.removeEventListener("dblclick", resetView); document.removeEventListener("pointerlockchange", pointerLockChange); document.removeEventListener("mousemove", mouseLook); window.removeEventListener("keyup", keyUp); window.removeEventListener("blur", onClearKeys); document.removeEventListener("visibilitychange", onClearKeys); for (const visual of sensorVisuals.values()) disposeSensorVisual(visual); sensorVisuals.clear(); radarGeometry.dispose(); radarMaterial.dispose(); floorSurface.texture.dispose(); floorSurface.bumpTexture.dispose(); wallSurface.texture.dispose(); wallSurface.bumpTexture.dispose(); disposeObject(scene); renderer.dispose(); renderer.domElement.remove(); };
+    return () => { cancelAnimationFrame(frame); observer.disconnect(); if (document.pointerLockElement === renderer.domElement) document.exitPointerLock(); renderer.domElement.removeEventListener("pointerdown", select); renderer.domElement.removeEventListener("pointermove", moveDrag); renderer.domElement.removeEventListener("pointerup", endDrag); renderer.domElement.removeEventListener("pointercancel", endDrag); renderer.domElement.removeEventListener("wheel", zoom); renderer.domElement.removeEventListener("dblclick", resetView); document.removeEventListener("pointerlockchange", pointerLockChange); document.removeEventListener("mousemove", mouseLook); window.removeEventListener("keyup", keyUp); window.removeEventListener("blur", onClearKeys); document.removeEventListener("visibilitychange", onClearKeys); for (const visual of sensorVisuals.values()) disposeSensorVisual(visual); sensorVisuals.clear(); radarGeometry.dispose(); radarMaterial.dispose(); floorSurface.texture.dispose(); floorSurface.bumpTexture.dispose(); wallSurface.texture.dispose(); wallSurface.bumpTexture.dispose(); for (const texture of landmarkTextures) texture.dispose(); disposeObject(scene); renderer.dispose(); renderer.domElement.remove(); };
   }, [awareness, contacts, onClearKeys, onKeyDown, onKeyUp, onSelect, onToggleThreat, options, overlays, sensors, world]);
   return <div className="three-canvas" ref={host}><div className="look-hint" ref={lookHint} hidden>CLICK TO LOOK · ESC TO RELEASE</div></div>;
 }

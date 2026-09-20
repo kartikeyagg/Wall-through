@@ -17,9 +17,18 @@ const TARGET_HURRY_MIN = 48;
 const TARGET_HURRY_MAX = 58;
 const TARGET_ACCELERATION = 30;
 const TARGET_BRAKING = 38;
-const TARGET_TURN_RATE = 1.35;
+const TARGET_TURN_RATE = 0.35;
 const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
 const angleDifference = (a, b) => Math.atan2(Math.sin(a - b), Math.cos(a - b));
+
+function seedForId(id) {
+  let seed = 2166136261;
+  for (let index = 0; index < id.length; index++) {
+    seed ^= id.charCodeAt(index);
+    seed = Math.imul(seed, 16777619);
+  }
+  return seed >>> 0;
+}
 
 // A local PRNG makes wandering repeatable without coupling targets to one another.
 function nextTargetRandom(motion) {
@@ -40,8 +49,68 @@ function targetMotion(seed, goalX, goalY) {
     desiredSpeed: TARGET_WALK_MIN,
     phaseRemaining: 1.5,
     scanDirection: seed & 1 ? 1 : -1,
+    scanAngle: null,
     avoidRemaining: 0,
+    avoidAngle: null,
+    resumeSpeed: TARGET_WALK_MIN,
   };
+}
+
+function nextLandmarkRandom(state) {
+  state.value = (Math.imul(state.value, 1664525) + 1013904223) >>> 0;
+  return state.value / 0x100000000;
+}
+
+function createLandmarks(walls) {
+  const random = { value: 0x6c8e9cf5 };
+  const colors = ["#d95f5f", "#e6ad3d", "#5ca9d6", "#72b978", "#9b75cf", "#d676a7"];
+  const landmarks = [];
+  const wallItem = (wallIndex, face, along, kind) => {
+    const wall = walls[wallIndex];
+    const horizontal = face === "top" || face === "bottom";
+    const normal = horizontal
+      ? { x: 0, y: face === "top" ? -1 : 1 }
+      : { x: face === "left" ? -1 : 1, y: 0 };
+    landmarks.push({
+      id: `L${landmarks.length + 1}`,
+      kind,
+      x: horizontal ? wall.x + along * wall.w : face === "left" ? wall.x : wall.x + wall.w,
+      y: horizontal ? face === "top" ? wall.y : wall.y + wall.h : wall.y + along * wall.h,
+      height: kind === "fixture" ? 34 + nextLandmarkRandom(random) * 35 : 65 + nextLandmarkRandom(random) * 85,
+      width: kind === "fixture" ? 16 + nextLandmarkRandom(random) * 18 : 24 + nextLandmarkRandom(random) * 48,
+      normal,
+      color: colors[Math.floor(nextLandmarkRandom(random) * colors.length)],
+      strength: 0.25 + nextLandmarkRandom(random) * 0.75,
+    });
+  };
+  // The long middle of the main partition is intentionally bare for weak fixes.
+  [0.08, 0.19, 0.79, 0.91].forEach((along, index) =>
+    wallItem(0, index % 2 ? "bottom" : "top", along, index === 1 ? "wall-panel" : "wall-art"));
+  [[1, "left"], [1, "right"], [2, "left"], [2, "right"], [3, "top"], [3, "bottom"]]
+    .forEach(([wallIndex, face], index) => {
+      for (let item = 0; item < (index < 2 ? 3 : 2); item++)
+        wallItem(wallIndex, face, 0.16 + item * 0.31 + nextLandmarkRandom(random) * 0.08,
+          (index + item) % 4 === 0 ? "fixture" : (index + item) % 2 ? "wall-panel" : "wall-art");
+    });
+  const clearFloor = (x, y) => !walls.some((wall) =>
+    x > wall.x - 18 && x < wall.x + wall.w + 18 && y > wall.y - 18 && y < wall.y + wall.h + 18);
+  while (landmarks.length < 30) {
+    const x = 55 + nextLandmarkRandom(random) * (WIDTH - 110);
+    const y = 55 + nextLandmarkRandom(random) * (HEIGHT - 110);
+    if (!clearFloor(x, y)) continue;
+    landmarks.push({
+      id: `L${landmarks.length + 1}`,
+      kind: "floor-marking",
+      x,
+      y,
+      height: 0,
+      width: 18 + nextLandmarkRandom(random) * 38,
+      normal: { x: 0, y: 0 },
+      color: colors[Math.floor(nextLandmarkRandom(random) * colors.length)],
+      strength: 0.18 + nextLandmarkRandom(random) * 0.72,
+    });
+  }
+  return landmarks;
 }
 
 export function createWorld(count = 7) {
@@ -62,6 +131,12 @@ export function createWorld(count = 7) {
     [880, 430, Math.PI],
     [110, 430, -0.7],
   ];
+  const walls = [
+    { x: 100, y: 320, w: 800, h: 22 },
+    { x: 535, y: 65, w: 20, h: 175 },
+    { x: 645, y: 440, w: 20, h: 190 },
+    { x: 80, y: 605, w: 200, h: 18 },
+  ];
   return {
     time: 0,
     officers: positions.slice(0, officerCount).map(([x, y, angle], i) => ({
@@ -77,19 +152,15 @@ export function createWorld(count = 7) {
     // officer has to clear the bystanders by hand.
     targets: [
       { id: "T1", x: 380, y: 210, z: 210, angle: 0.35, radius: 12, hostile: true,
-        motion: targetMotion(0x4f1bbcdc, 470, 205) },
+        motion: targetMotion(seedForId("T1"), 470, 205) },
       { id: "T2", x: 850, y: 160, z: 160, angle: 1.2, radius: 12, hostile: false,
-        motion: targetMotion(0x71e2a9c3, 760, 245) },
+        motion: targetMotion(seedForId("T2"), 760, 245) },
       { id: "T3", x: 400, y: 540, z: 540, angle: -0.6, radius: 12, hostile: false,
-        motion: targetMotion(0x19c84a6d, 340, 470) },
+        motion: targetMotion(seedForId("T3"), 340, 470) },
     ],
     sensors: [],
-    walls: [
-      { x: 100, y: 320, w: 800, h: 22 },
-      { x: 535, y: 65, w: 20, h: 175 },
-      { x: 645, y: 440, w: 20, h: 190 },
-      { x: 80, y: 605, w: 200, h: 18 },
-    ],
+    walls,
+    landmarks: createLandmarks(walls),
   };
 }
 
@@ -138,6 +209,29 @@ export function canSee(
     inView(observer, target, range, fov) &&
     !segmentBlocked(observer, target, walls)
   );
+}
+
+/** Static visual features visible to one camera, excluding their back faces. */
+export function visibleLandmarks(
+  world,
+  officer,
+  { range = 420, fov = Math.PI * 0.65 } = {},
+) {
+  return (world.landmarks ?? []).filter((landmark) => {
+    if (!inView(officer, landmark, range, fov)) return false;
+    const { normal } = landmark;
+    if (normal.x || normal.y) {
+      const facingSide = (officer.x - landmark.x) * normal.x +
+        (officer.y - landmark.y) * normal.y;
+      if (facingSide <= 1e-8) return false;
+    }
+    // The item itself is flush with its opaque wall, so trace to its visible face.
+    const visibleFace = {
+      x: landmark.x + normal.x * 1e-6,
+      y: landmark.y + normal.y * 1e-6,
+    };
+    return !segmentBlocked(officer, visibleFace, world.walls);
+  });
 }
 
 /** Only live measurements are emitted; unknown targets do not leak ground truth. */
@@ -311,35 +405,112 @@ function chooseTargetGoal(target, world) {
   motion.goalY = target.y;
 }
 
+function rayBoxDistance(x, y, dx, dy, left, top, right, bottom) {
+  let entry = -Infinity;
+  let exit = Infinity;
+  for (const [origin, delta, low, high] of [[x, dx, left, right], [y, dy, top, bottom]]) {
+    if (Math.abs(delta) < 1e-10) {
+      if (origin < low || origin > high) return Infinity;
+      continue;
+    }
+    const first = (low - origin) / delta;
+    const second = (high - origin) / delta;
+    entry = Math.max(entry, Math.min(first, second));
+    exit = Math.min(exit, Math.max(first, second));
+  }
+  return exit >= Math.max(entry, 0) ? Math.max(entry, 0) : Infinity;
+}
+
+function forwardClearance(target, world) {
+  const dx = Math.cos(target.angle);
+  const dy = Math.sin(target.angle);
+  let nearest = Infinity;
+  if (dx > 1e-10) nearest = (WIDTH - target.radius - target.x) / dx;
+  if (dx < -1e-10) nearest = (target.radius - target.x) / dx;
+  if (dy > 1e-10) nearest = Math.min(nearest, (HEIGHT - target.radius - target.y) / dy);
+  if (dy < -1e-10) nearest = Math.min(nearest, (target.radius - target.y) / dy);
+  for (const wall of world.walls) {
+    const clearanceRadius = target.radius - 1e-6;
+    nearest = Math.min(nearest, rayBoxDistance(target.x, target.y, dx, dy,
+      wall.x - clearanceRadius, wall.y - clearanceRadius,
+      wall.x + wall.w + clearanceRadius, wall.y + wall.h + clearanceRadius));
+  }
+  for (const body of [...world.officers, ...world.targets]) {
+    if (body === target) continue;
+    const offsetX = body.x - target.x;
+    const offsetY = body.y - target.y;
+    const along = offsetX * dx + offsetY * dy;
+    const across = offsetX * -dy + offsetY * dx;
+    const radius = target.radius + body.radius;
+    if (along > 0 && Math.abs(across) < radius)
+      nearest = Math.min(nearest, along - Math.sqrt(radius ** 2 - across ** 2));
+  }
+  return nearest;
+}
+
+function beginAvoid(target, motion, world) {
+  motion.scanDirection = nextTargetRandom(motion) < 0.5 ? -1 : 1;
+  motion.avoidRemaining = 2.3 + nextTargetRandom(motion) * 0.4;
+  // Keep this bearing fixed: a turn along the obstruction must be completable.
+  motion.avoidAngle = angleDifference(target.angle + motion.scanDirection * Math.PI / 2, 0);
+  motion.resumeSpeed = Math.min(motion.resumeSpeed, TARGET_WALK_MAX);
+  motion.desiredSpeed = 0;
+  chooseTargetGoal(target, world);
+}
+
 function stepTarget(target, dt, physics, world) {
-  const motion = target.motion ??= targetMotion(0x9e3779b9, target.x, target.y);
+  const motion = target.motion ??= targetMotion(seedForId(target.id), target.x, target.y);
+  motion.resumeSpeed ??= motion.desiredSpeed;
   motion.phaseRemaining -= dt;
   if (motion.phaseRemaining <= 0) {
     const choice = nextTargetRandom(motion);
     motion.phaseRemaining = choice < 0.22
       ? 1.2 + nextTargetRandom(motion) * 2.4
       : 2.5 + nextTargetRandom(motion) * 3.5;
-    motion.desiredSpeed = choice < 0.22
+    const nextSpeed = choice < 0.22
       ? 0
       : choice > 0.88
         ? TARGET_HURRY_MIN + nextTargetRandom(motion) * (TARGET_HURRY_MAX - TARGET_HURRY_MIN)
         : TARGET_WALK_MIN + nextTargetRandom(motion) * (TARGET_WALK_MAX - TARGET_WALK_MIN);
     motion.scanDirection = nextTargetRandom(motion) < 0.5 ? -1 : 1;
-    if (motion.desiredSpeed > 0) chooseTargetGoal(target, world);
+    motion.resumeSpeed = nextSpeed;
+    if (motion.avoidRemaining <= 0) motion.desiredSpeed = nextSpeed;
+    // A pause gets at most one small, occasional glance, then settles.
+    motion.scanAngle = nextSpeed === 0 && nextTargetRandom(motion) < 0.55
+      ? angleDifference(target.angle + motion.scanDirection * (0.2 + nextTargetRandom(motion) * 0.35), 0)
+      : null;
+    if (nextSpeed > 0) chooseTargetGoal(target, world);
   }
 
   const distance = Math.hypot(motion.goalX - target.x, motion.goalY - target.y);
-  if (distance < 22 && motion.desiredSpeed > 0) chooseTargetGoal(target, world);
+  if (distance < 22 && motion.resumeSpeed > 0) chooseTargetGoal(target, world);
   let desiredAngle = Math.atan2(motion.goalY - target.y, motion.goalX - target.x);
   if (motion.desiredSpeed === 0) {
-    // A pause is a look-around, not a frozen mannequin.
-    desiredAngle = target.angle + motion.scanDirection * 0.55;
-  } else if (motion.avoidRemaining > 0) {
-    desiredAngle = target.angle + motion.scanDirection * Math.PI / 2;
-    motion.avoidRemaining -= dt;
+    desiredAngle = motion.scanAngle ?? target.angle;
   }
-  const turn = clamp(angleDifference(desiredAngle, target.angle), -TARGET_TURN_RATE * dt, TARGET_TURN_RATE * dt);
+  if (motion.avoidRemaining > 0) {
+    desiredAngle = motion.avoidAngle ?? target.angle;
+    motion.avoidRemaining -= dt;
+    motion.desiredSpeed = 0;
+    if (motion.avoidRemaining <= 0) {
+      motion.avoidRemaining = 0;
+      motion.avoidAngle = null;
+      motion.desiredSpeed = motion.resumeSpeed;
+    }
+  }
+  const turnRate = motion.avoidRemaining > 0 ? 0.7 : TARGET_TURN_RATE;
+  const turn = clamp(angleDifference(desiredAngle, target.angle), -turnRate * dt, turnRate * dt);
   target.angle = angleDifference(target.angle + turn, 0);
+  if (motion.avoidRemaining <= 0 && motion.resumeSpeed > 0) {
+    const clearance = forwardClearance(target, world);
+    const stoppingDistance = motion.speed ** 2 / (2 * TARGET_BRAKING) + 6;
+    if (motion.speed > 1 && clearance < stoppingDistance) beginAvoid(target, motion, world);
+    else {
+      // Start easing off before contact; an actual blocked frame is never a stop.
+      const safeSpeed = Math.sqrt(2 * TARGET_BRAKING * Math.max(0, clearance - 2));
+      motion.desiredSpeed = Math.min(motion.resumeSpeed, safeSpeed);
+    }
+  }
   const acceleration = motion.desiredSpeed > motion.speed ? TARGET_ACCELERATION : TARGET_BRAKING;
   motion.speed += clamp(motion.desiredSpeed - motion.speed, -acceleration * dt, acceleration * dt);
   if (motion.speed <= 1e-8) return;
@@ -349,13 +520,8 @@ function stepTarget(target, dt, physics, world) {
     Math.sin(target.angle) * motion.speed * dt,
   );
   if (result.blockedX || result.blockedY) {
-    // Turn along an obstruction and select a route rather than reflecting off it.
-    if (motion.avoidRemaining <= 0) {
-      motion.scanDirection = nextTargetRandom(motion) < 0.5 ? -1 : 1;
-      motion.avoidRemaining = 0.8 + nextTargetRandom(motion) * 0.5;
-      motion.desiredSpeed = Math.min(motion.desiredSpeed, TARGET_WALK_MAX);
-      chooseTargetGoal(target, world);
-    }
+    // Brake before retrying so a kinematic body never grinds along an obstacle.
+    if (motion.avoidRemaining <= 0) beginAvoid(target, motion, world);
   }
 }
 

@@ -239,3 +239,22 @@ test("the minimap plots self-localized officers and detected tracks", async ({ p
   await expect(minimap).not.toHaveClass(/minimap--expanded/);
   expect(errors).toEqual([]);
 });
+
+test("mouse look can be switched off so clicks keep selecting", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await pausedScene(page);
+  const mouseLook = page.getByRole("checkbox", { name: "Mouse look (glasses)" });
+  await expect(mouseLook).toBeChecked();
+  await mouseLook.uncheck();
+  await page.getByRole("button", { name: "Officer glasses" }).click();
+  const canvas = page.locator(".three-canvas canvas");
+  await expect(canvas).toBeVisible();
+  // Clear of the minimap, which deliberately overlays the top-left corner.
+  const box = (await canvas.boundingBox())!;
+  // With the toggle off nothing may capture the pointer, so a click stays a click.
+  await canvas.click({ position: { x: box.width / 2, y: box.height / 2 } });
+  expect(await page.evaluate(() => document.pointerLockElement !== null)).toBe(false);
+  await expect(page.locator(".look-hint")).toBeHidden();
+  expect(errors).toEqual([]);
+});

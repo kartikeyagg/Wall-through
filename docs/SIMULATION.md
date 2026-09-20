@@ -10,6 +10,19 @@ The world overview is an inspectable third-person 3D scene. Officer glasses is a
 
 Each officer carries one sensor: the head-mounted stereo camera. Its two glass lenses sit directly over the officer's eyes, so the camera's optical axis and the officer's line of sight are the same. The old line-of-sight `simulated-camera` detection provider has been removed.
 
+### Landmarks are the map the rigs localize against
+
+`world.landmarks` is a fixed set of visual features with a position, a facing
+normal, a colour and a `strength` — how distinctive the feature is to a matcher.
+`visibleLandmarks(world, officer, { range, fov })` returns the ones an officer
+can actually see, respecting range, field of view, wall occlusion, and which
+side of a wall a mounted item faces.
+
+That set drives the quality of the stereo fix, so the decoration is load
+bearing rather than cosmetic. A low-`strength` landmark is drawn washed out and
+a high-`strength` one bold, so the picture on screen explains the number in the
+panel. One stretch of wall is deliberately left bare.
+
 ### Self localization: stereo map features, compass, then IMU
 
 Every police head rig also has a compass and a compact IMU. `SelfLocalization` in `src/sensors.js` derives a primary self-pose from known static stereo map features (walls and corners) and compass heading. It then applies the IMU's integrated velocity and yaw as a low-weight correction. This order is deliberate: the simulation makes the IMU noticeably noisier than a real unit, so it may smooth a pose but cannot replace stereo and compass.
@@ -24,7 +37,7 @@ Those appearances derive from the person's id alone. Nothing about how a person 
 
 They also move like people rather than billiard balls: each person eases between walking, pausing, and hurrying, steers toward a waypoint at a capped turn rate, rounds a wall instead of reflecting off it, and keeps scanning while stopped. The motion is seeded per person, so the simulation stays reproducible.
 
-The environment is generated at load: floor tiles with grout, per-tile tone variation and wear, and walls with panel seams, a chair rail, skirting, and a capped top edge, lit through a matching bump map. These visual details make the first-person stereo scene easier to inspect while keeping the scene small and asset-free.
+The environment is generated at load: floor tiles with grout, per-tile tone variation and wear, and walls with panel seams, a chair rail, skirting, and a capped top edge, lit through a matching bump map. Scattered over that are **landmarks** — framed pictures, posters, wall panels, floor markings and small fixtures — which are what the stereo rigs match against to locate themselves. They are scenery: they never move, never collide, and never enter any detection, track or threat path. These visual details make the first-person stereo scene easier to inspect while keeping the scene small and asset-free.
 
 The current detector remains a deterministic geometric stereo model, not an image classifier: textures do not alter a detection result. They are also the visible reference map represented by the self-localization seam, ready for replacement with real feature matching later.
 
@@ -59,7 +72,9 @@ Arrows only appear for real tracks: the officer's own, plus teammates' when **Sh
 | Ctrl + drag (overview) | Orbit the camera: left/right rotates around the arena, up/down tilts from near-ground to top-down |
 | Ctrl + scroll (overview) | Zoom the overview camera in and out |
 | Double-click (overview) | Reset the overview camera to its default angle and distance |
-| Click the glasses view | Capture the mouse and steer the officer's heading directly, as in a first-person game; Esc releases it |
+| Click empty glasses view | Capture the mouse and steer the officer's heading directly, as in a first-person game; Esc releases it |
+| Click a person, any view | Clear or re-flag them. While the mouse is captured this picks at the centre crosshair, so look at someone and click |
+| Mouse look | Turn mouse capture off entirely. Clicks then always select, and Ctrl + drag remains the way to turn |
 | Ctrl + drag (glasses) | Turn the selected officer left/right without capturing the mouse; the view stays locked to their stereo rig |
 | Shared vision | Show/hide teammate-provided 3D target outlines |
 | Field of view / range | Adjust the stereo rig's horizontal FOV and operator range cutoff |

@@ -17,8 +17,10 @@ export const CONTROL_GROUPS = [
     controls: [
       { keys: ["Q", "E"], action: "Turn the selected officer continuously" },
       { keys: ["↶ Turn left", "Turn right ↷"], action: "Turn the selected officer 15° per click" },
-      { keys: ["Click glasses view", "Move mouse"], keyStyle: "chord", action: "Look and turn in officer glasses" },
+      { keys: ["Click empty glasses view", "Move mouse"], keyStyle: "chord", action: "Capture the mouse and turn the officer", context: "Needs Mouse look on in Simulation settings." },
       { keys: ["Esc"], action: "Release mouse look" },
+      { keys: ["Click while looking"], action: "Select an officer, or clear and re-flag a person, at the crosshair" },
+      { keys: ["Mouse look"], action: "Turn mouse capture off entirely; clicks then always select", context: "In Simulation settings." },
       { keys: ["Ctrl", "Drag"], keyStyle: "chord", action: "Turn the officer from the glasses view as a fallback" }
     ]
   },
