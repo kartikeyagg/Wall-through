@@ -9,6 +9,8 @@ export const DEFAULT_STATE: "hostile";
 export interface ThreatRegistryOptions {
   /** Retain a non-live track's clearance for this many milliseconds. */
   graceMs?: number;
+  /** Lapse a clearance after this long without a live sensor resolution. */
+  sightGraceMs?: number;
   /** Maximum retained correction entries, evicting least recently seen first. */
   maxEntries?: number;
 }
@@ -28,6 +30,8 @@ export interface ThreatEntry {
   restoredBy?: string;
   /** Restore timestamp, milliseconds. */
   restoredAt?: number;
+  /** Why this track was restored to hostile. */
+  restoredReason?: string;
   /** Increments whenever this track's registry entry changes. */
   revision: number;
 }
@@ -56,6 +60,7 @@ export interface ClearanceScore {
 export class ThreatRegistry {
   constructor(options?: ThreatRegistryOptions);
   readonly graceMs: number;
+  readonly sightGraceMs: number;
   readonly maxEntries: number;
   /** Clear a false-positive track for the whole team. */
   clear(trackId: string, officerId: string, timestamp: number, options?: ClearanceOptions): ThreatEntry | null;
@@ -75,6 +80,8 @@ export class ThreatRegistry {
   /** Return annotated observations that remain flagged as hostile. */
   hostileOnly<T extends object>(observations: T[]): Array<ClassifiedObservation<T>>;
   hostileOnly(observations: unknown): ThreatAnnotation[];
+  /** Refresh live sensor sight and lapse cleared tracks that remain unseen. */
+  observeSight(inSightTrackIds: Iterable<string>, timestamp: number): number;
   /** Refresh live entries, expire absent entries past the grace period, and enforce capacity. */
   prune(liveTrackIds: Iterable<string>, timestamp: number): number;
   /** Count states in observations, or in the registry itself when omitted. */

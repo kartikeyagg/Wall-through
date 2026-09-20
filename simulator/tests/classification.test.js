@@ -61,12 +61,35 @@ test("clearance outlives a brief disappearance and expires past its grace period
   assert.equal(registry.stateOf("T1"), "hostile");
 });
 
-test("capacity retains most recently seen entries", () => {
-  const registry = new ThreatRegistry({ maxEntries: 2 });
+test("clearance lapses only after it leaves live sensor sight", () => {
+  const registry = new ThreatRegistry({ sightGraceMs: 100 });
+  registry.clear("T1", "officer-a", 0, { reason: "identified" });
+  assert.equal(registry.observeSight(["T1"], 90), 0);
+  assert.equal(registry.stateOf("T1"), "cleared");
+  assert.equal(registry.observeSight([], 150), 0);
+  assert.equal(registry.stateOf("T1"), "cleared");
+  assert.equal(registry.observeSight(["T1"], 151), 0);
+  assert.equal(registry.observeSight([], 252), 1);
+  const lapsed = registry.entryOf("T1");
+  assert.equal(registry.stateOf("T1"), "hostile");
+  assert.equal(registry.isCleared("T1"), false);
+  assert.equal(registry.annotate(observations("T1"))[0].threat, "hostile");
+  assert.equal(lapsed.restoredBy, "system");
+  assert.equal(lapsed.restoredReason, "left sight");
+  assert.equal(lapsed.officerId, "officer-a");
+  assert.equal(lapsed.revision, 2);
+  assert.equal(registry.clear("T1", "officer-b", 260).revision, 3);
+  assert.equal(registry.isCleared("T1"), true);
+});
+
+test("prune capacity retains most recently live entries after sight lapses", () => {
+  const registry = new ThreatRegistry({ maxEntries: 2, sightGraceMs: 5 });
   registry.clear("T1", "a", 0);
   registry.clear("T2", "a", 1);
   registry.prune(["T1", "T2"], 10);
+  registry.observeSight(["T1", "T2"], 10);
   registry.prune(["T2"], 20);
+  registry.observeSight(["T2"], 20);
   registry.clear("T3", "a", 21);
   assert.equal(registry.entryOf("T1"), undefined);
   assert.ok(registry.entryOf("T2"));

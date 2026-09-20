@@ -1,5 +1,6 @@
 const DEFAULTS = {
   graceMs: 6000,
+  sightGraceMs: 1200,
   maxEntries: 256,
 };
 
@@ -29,9 +30,11 @@ export class ThreatRegistry {
   constructor(options = {}) {
     if (!options || typeof options !== "object") options = {};
     this.graceMs = finite(options.graceMs) ? Math.max(0, options.graceMs) : DEFAULTS.graceMs;
+    this.sightGraceMs = finite(options.sightGraceMs) ? Math.max(0, options.sightGraceMs) : DEFAULTS.sightGraceMs;
     this.maxEntries = finite(options.maxEntries) ? Math.max(0, Math.floor(options.maxEntries)) : DEFAULTS.maxEntries;
     this.entries = new Map();
     this.lastSeen = new Map();
+    this.lastSight = new Map();
     this.changes = new Map();
     this.sequence = 0;
   }
@@ -50,6 +53,7 @@ export class ThreatRegistry {
     };
     this.entries.set(trackId, entry);
     this.lastSeen.set(trackId, timestamp);
+    this.lastSight.set(trackId, timestamp);
     this.changes.set(trackId, ++this.sequence);
     this.enforceMaxEntries();
     return { ...entry };
@@ -72,6 +76,35 @@ export class ThreatRegistry {
     this.changes.set(trackId, ++this.sequence);
     this.enforceMaxEntries();
     return { ...entry };
+  }
+
+  observeSight(inSightTrackIds, timestamp) {
+    if (!finite(timestamp)) return 0;
+    const inSight = new Set();
+    if (inSightTrackIds && typeof inSightTrackIds[Symbol.iterator] === "function") {
+      for (const trackId of inSightTrackIds) if (typeof trackId === "string") inSight.add(trackId);
+    }
+    for (const trackId of inSight) if (this.entries.has(trackId)) this.lastSight.set(trackId, timestamp);
+
+    let lapsed = 0;
+    for (const [trackId, previous] of this.entries) {
+      if (previous.state !== "cleared" || inSight.has(trackId) || timestamp - (this.lastSight.get(trackId) ?? timestamp) <= this.sightGraceMs) continue;
+      const entry = {
+        trackId,
+        state: "hostile",
+        officerId: previous.officerId,
+        timestamp: previous.timestamp,
+        ...(previous.reason !== undefined ? { reason: previous.reason } : {}),
+        restoredBy: "system",
+        restoredAt: timestamp,
+        restoredReason: "left sight",
+        revision: previous.revision + 1,
+      };
+      this.entries.set(trackId, entry);
+      this.changes.set(trackId, ++this.sequence);
+      lapsed += 1;
+    }
+    return lapsed;
   }
 
   toggle(trackId, officerId, timestamp, options) {
@@ -105,6 +138,15 @@ export class ThreatRegistry {
           clearedBy: entry.officerId,
           clearedAt: entry.timestamp,
           ...(entry.reason !== undefined ? { clearedReason: entry.reason } : {}),
+        } : {}),
+        // Why a flag is back belongs on the observation, not in registry lookups
+        // at render time: a consumer showing "cleared by" owes the reader the
+        // symmetric "re-flagged by", and a lapse reads differently from an
+        // officer's own correction.
+        ...(threat === "hostile" && entry?.restoredBy !== undefined ? {
+          restoredBy: entry.restoredBy,
+          restoredAt: entry.restoredAt,
+          ...(entry.restoredReason !== undefined ? { restoredReason: entry.restoredReason } : {}),
         } : {}),
       };
     });
@@ -156,6 +198,7 @@ export class ThreatRegistry {
   reset() {
     this.entries.clear();
     this.lastSeen.clear();
+    this.lastSight.clear();
     this.changes.clear();
     this.sequence = 0;
   }
@@ -163,6 +206,7 @@ export class ThreatRegistry {
   delete(trackId) {
     this.entries.delete(trackId);
     this.lastSeen.delete(trackId);
+    this.lastSight.delete(trackId);
     this.changes.delete(trackId);
   }
 
