@@ -2,6 +2,8 @@
 :root {
   color-scheme: dark;
   --lime: #bcf574;
+  --radar: #e879f9;
+  --slate: #94a3b8;
   --muted: #8c9ba5;
   --line: #2a353c;
 }
@@ -816,4 +818,138 @@ kbd {
     text-align: center;
     font-size: 7px;
   }
+}
+
+/* --- mmWave sensor net and threat tagging --- */
+.violet {
+  color: var(--radar);
+}
+.warn {
+  color: #ff8b79;
+}
+.transport .throw {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--radar);
+  border-color: #6d3f79;
+}
+.transport .throw:hover:not(:disabled) {
+  background: #2c1c33;
+}
+.transport .throw:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.transport .throw small {
+  font: 9px monospace;
+  color: var(--muted);
+}
+.legend .radar {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 2px solid var(--radar);
+  box-shadow: 0 0 8px rgba(232, 121, 249, 0.45);
+}
+.legend .cleared {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 2px dashed var(--slate);
+}
+.pucks {
+  min-height: 56px;
+  margin-top: 12px;
+}
+.puck {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 9px 0;
+  border-bottom: 1px solid #243038;
+}
+.puck:last-child {
+  border-bottom: 0;
+}
+.puck-icon {
+  color: #56606a;
+  font-size: 19px;
+}
+.puck.active .puck-icon {
+  color: var(--radar);
+  text-shadow: 0 0 10px rgba(232, 121, 249, 0.4);
+}
+.puck strong {
+  font-size: 12px;
+  font-weight: 500;
+}
+.puck-state {
+  font: 8px monospace;
+  color: var(--muted);
+  margin-left: 6px;
+}
+.puck.active .puck-state {
+  color: var(--radar);
+}
+.puck small {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  margin-top: 4px;
+}
+.puck-returns {
+  margin-left: auto;
+  font: 10px monospace;
+  color: var(--radar);
+  font-variant-numeric: tabular-nums;
+}
+.puck button {
+  font-size: 10px;
+  padding: 4px 8px;
+}
+.contact-icon.radar {
+  color: var(--radar);
+  text-shadow: 0 0 9px rgba(232, 121, 249, 0.35);
+}
+.contact-icon.cleared {
+  color: var(--slate);
+  text-shadow: none;
+}
+.contact .radar-tag {
+  font: 8px monospace;
+  color: var(--radar);
+  border: 1px solid #6d3f79;
+  border-radius: 3px;
+  padding: 2px 4px;
+  margin-left: 6px;
+}
+.contact.cleared {
+  opacity: 0.72;
+}
+.contact.cleared strong {
+  text-decoration: line-through;
+  text-decoration-color: #5d6b76;
+}
+.contact.cleared strong span {
+  color: var(--slate);
+  text-decoration: none;
+}
+.detag {
+  margin-left: auto;
+  font-size: 10px;
+  padding: 5px 9px;
+  white-space: nowrap;
+}
+.detag:hover {
+  border-color: #6d3f79;
+  color: #f3c8fa;
+}
+.detag.restore {
+  color: var(--lime);
+  border-color: #4d6b33;
+}
+.detag.restore:hover {
+  border-color: var(--lime);
+  color: #d0ffa2;
 }

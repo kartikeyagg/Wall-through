@@ -4,7 +4,7 @@
  * between simulation ground-plane units and the metres used by `stereo.js`.
  */
 import type { DeployedSensor, Observation, Wall, World } from "./simulation.js";
-import type { MmWaveRadar, MmWaveTrackerOptions, RadarTrack, SensorEstimate, SensorLocalizer } from "./mmwave.js";
+import type { MmWaveRadar, MmWaveTrackerOptions, RadarTrack, SensorLocalizer } from "./mmwave.js";
 import type { CameraPose, StereoRig, StereoRigConfig, Vec3 } from "./stereo.js";
 import type { MotionTrack, TrackerOptions } from "./tracking.js";
 import type { Skeleton, SkeletonOptions } from "./skeleton.js";
