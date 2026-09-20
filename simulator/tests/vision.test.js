@@ -270,3 +270,19 @@ test("observations carry the modality behind each track and their pucks' owners"
   assert.ok(observations.every((item) => item.radar === item.sources.includes("mmwave")));
   assert.deepEqual(observations.sensors, [{ id: "M1", ownerId: "P2" }]);
 });
+
+test("one puck holds one radar track per body instead of breeding ghosts", () => {
+  const world = createWorld();
+  const pipeline = new StereoVisionPipeline({ rig: { baseline: 0.08 }, fov: 117 * Math.PI / 180, range: 420 });
+  throwSensor(world, "P2", { timestamp: 0 });
+  const ids = new Set();
+  let mostAtOnce = 0;
+  fly(world, pipeline, 1500, (frame) => {
+    for (const track of frame.radarTracks) ids.add(track.trackId);
+    mostAtOnce = Math.max(mostAtOnce, frame.radarTracks.length);
+  });
+  // Three bodies exist; a filter that rejects good returns during a turn spawns
+  // a rival track each time and the count runs away.
+  assert.ok(ids.size <= world.targets.length, `expected at most ${world.targets.length} radar tracks over the run, got ${ids.size}`);
+  assert.ok(mostAtOnce <= world.targets.length, `expected at most ${world.targets.length} live at once, got ${mostAtOnce}`);
+});

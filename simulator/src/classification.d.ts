@@ -49,7 +49,7 @@ export interface ThreatStats {
 export interface ClearanceScore {
   correctlyCleared: number;
   wronglyCleared: number;
-  missedHostiles: number;
+  bystandersLeftFlagged: number;
   correctlyFlagged: number;
 }
 

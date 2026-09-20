@@ -88,6 +88,6 @@ test("clearance scoring separates safe detags from dangerous ones", () => {
   assert.deepEqual(scoreClearances(annotated, new Map([
     ["bystander", false], ["hostile", true], ["flagged", true],
   ])), {
-    correctlyCleared: 1, wronglyCleared: 1, missedHostiles: 0, correctlyFlagged: 1,
+    correctlyCleared: 1, wronglyCleared: 1, bystandersLeftFlagged: 0, correctlyFlagged: 1,
   });
 });

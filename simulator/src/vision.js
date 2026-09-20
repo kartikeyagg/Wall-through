@@ -57,6 +57,17 @@ export function occluded(from, to, walls) {
 const FIX_INTERVAL_MS = 200;
 
 /**
+ * A constant-velocity model under-describes people who turn on the spot and
+ * rebound off walls, so the filter's innovation covariance is optimistic for
+ * exactly the movement this world is full of. At the textbook 99% chi-square
+ * gate a good return lands outside it during a turn and starts a rival track:
+ * measured over 25 seconds, one puck accumulated twelve track ids and nine
+ * simultaneous ghosts for three bodies. Widening the gate costs nothing in
+ * detections and holds one track per body.
+ */
+const RADAR_GATE = { gateChiSq: 60 };
+
+/**
  * The rig that fixes a thrown puck. Same optics as the detector, but a far
  * lower pixel-height gate: a puck is tiny in frame, and its retroreflective
  * marker is a bright, unambiguous blob rather than a body the detector has to
@@ -341,7 +352,7 @@ export class StereoVisionPipeline {
         );
         let tracker = this.radarTrackers.get(sensor.id);
         if (!tracker) {
-          tracker = new MmWaveTracker({ radar: this.radar, ...this.options.radarTracker });
+          tracker = new MmWaveTracker({ radar: this.radar, ...RADAR_GATE, ...this.options.radarTracker });
           this.radarTrackers.set(sensor.id, tracker);
         }
         const pose = { id: sensor.id, x: estimate.position.x, y: estimate.position.y, angle: sensor.angle };

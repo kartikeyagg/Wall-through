@@ -189,7 +189,7 @@ export class ThreatRegistry {
 
 /** Ground truth is simulation-only and must never enter the detection path. */
 export function scoreClearances(observations, truth) {
-  const scores = { correctlyCleared: 0, wronglyCleared: 0, missedHostiles: 0, correctlyFlagged: 0 };
+  const scores = { correctlyCleared: 0, wronglyCleared: 0, bystandersLeftFlagged: 0, correctlyFlagged: 0 };
   for (const observation of Array.isArray(observations) ? observations : []) {
     const hostile = truthFor(truth, observation?.targetId);
     if (hostile === undefined) continue;
@@ -199,7 +199,7 @@ export function scoreClearances(observations, truth) {
     } else if (hostile) {
       scores.correctlyFlagged += 1;
     } else {
-      scores.missedHostiles += 1;
+      scores.bystandersLeftFlagged += 1;
     }
   }
   return scores;
