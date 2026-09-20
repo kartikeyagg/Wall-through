@@ -139,7 +139,7 @@ function makeHead(skin: string) {
   return head;
 }
 
-type HumanParts = { body: THREE.Mesh; shoulders: THREE.Group; leftUpperArm: THREE.Group; leftLowerArm: THREE.Group; rightUpperArm: THREE.Group; rightLowerArm: THREE.Group; leftUpperLeg: THREE.Group; leftLowerLeg: THREE.Group; rightUpperLeg: THREE.Group; rightLowerLeg: THREE.Group; phase: number; height: number; last: { x: number; y: number; time: number } | null };
+type HumanParts = { body: THREE.Mesh; shoulders: THREE.Group; leftUpperArm: THREE.Group; leftLowerArm: THREE.Group; rightUpperArm: THREE.Group; rightLowerArm: THREE.Group; leftUpperLeg: THREE.Group; leftLowerLeg: THREE.Group; rightUpperLeg: THREE.Group; rightLowerLeg: THREE.Group; phase: number; height: number; last: { x: number; y: number; time: number } | null; gaitSpeed?: number };
 
 /** A stable hash gives each identity a repeatable look without leaking lab-only threat state. */
 function idHash(id: string) {
@@ -194,9 +194,15 @@ function makeOfficer(color: string) {
 function animateHuman(group: THREE.Group, agent: { x: number; y: number }, time: number) {
   const human = group.userData.human as HumanParts | undefined;
   if (!human) return;
-  const previous = human.last, moved = previous ? Math.hypot(agent.x - previous.x, agent.y - previous.y) / Math.max(time - previous.time, 1 / 60) : 0;
-  human.last = { x: agent.x, y: agent.y, time };
-  const speed = THREE.MathUtils.clamp(moved / 44, 0, 1), gait = time * (3.4 + speed * 6.5) + human.phase;
+  const previous = human.last, elapsed = previous ? time - previous.time : 0;
+  if (!previous) human.last = { x: agent.x, y: agent.y, time };
+  else if (elapsed > 1e-6) {
+    const measured = Math.hypot(agent.x - previous.x, agent.y - previous.y) / elapsed;
+    const settled = human.gaitSpeed ?? measured;
+    human.gaitSpeed = settled + (measured - settled) * (1 - Math.exp(-elapsed / 0.12));
+    human.last = { x: agent.x, y: agent.y, time };
+  }
+  const speed = THREE.MathUtils.clamp((human.gaitSpeed ?? 0) / 44, 0, 1), gait = time * (3.4 + speed * 6.5) + human.phase;
   if (speed < 0.035) {
     const sway = Math.sin(time * 1.25 + human.phase), breath = Math.sin(time * 2.1 + human.phase) * 0.006;
     human.body.position.y = 0.55 * human.height + breath; human.shoulders.rotation.z = sway * 0.028;

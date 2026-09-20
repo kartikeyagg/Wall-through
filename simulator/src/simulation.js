@@ -17,7 +17,9 @@ const TARGET_HURRY_MIN = 48;
 const TARGET_HURRY_MAX = 58;
 const TARGET_ACCELERATION = 30;
 const TARGET_BRAKING = 38;
-const TARGET_TURN_RATE = 0.35;
+const TARGET_TURN_RATE = 2.1;
+const TARGET_IDLE_TURN_RATE = 0.35;
+const TARGET_REPLAN_INTERVAL = 0.65;
 const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
 const angleDifference = (a, b) => Math.atan2(Math.sin(a - b), Math.cos(a - b));
 
@@ -53,6 +55,13 @@ function targetMotion(seed, goalX, goalY) {
     avoidRemaining: 0,
     avoidAngle: null,
     resumeSpeed: TARGET_WALK_MIN,
+    navigationAngle: null,
+    replanRemaining: 0,
+    stuckElapsed: 0,
+    stuckX: null,
+    stuckY: null,
+    turnDirection: 0,
+    turnHoldRemaining: 0,
   };
 }
 
@@ -394,15 +403,16 @@ function chooseTargetGoal(target, world) {
   const start = Math.floor(nextTargetRandom(motion) * waypoints.length);
   for (let offset = 0; offset < waypoints.length; offset++) {
     const [x, y] = waypoints[(start + offset) % waypoints.length];
-    if (targetFits(target, x, y, world.walls) && !segmentBlocked(target, { x, y }, world.walls)) {
+    // Goals are destinations, rather than immediate steering instructions. A
+    // route may cross a partition; the local planner below takes it around.
+    if (targetFits(target, x, y, world.walls)) {
       motion.goalX = x;
       motion.goalY = y;
       return;
     }
   }
-  // The current location is always safe; trying again later is safer than clipping a wall.
-  motion.goalX = target.x;
-  motion.goalY = target.y;
+  // Every listed waypoint is normally valid. Retaining the previous goal is
+  // safer than turning a failed selection into a per-frame goal churn.
 }
 
 function rayBoxDistance(x, y, dx, dy, left, top, right, bottom) {
@@ -421,9 +431,9 @@ function rayBoxDistance(x, y, dx, dy, left, top, right, bottom) {
   return exit >= Math.max(entry, 0) ? Math.max(entry, 0) : Infinity;
 }
 
-function forwardClearance(target, world) {
-  const dx = Math.cos(target.angle);
-  const dy = Math.sin(target.angle);
+function forwardClearance(target, world, angle = target.angle) {
+  const dx = Math.cos(angle);
+  const dy = Math.sin(angle);
   let nearest = Infinity;
   if (dx > 1e-10) nearest = (WIDTH - target.radius - target.x) / dx;
   if (dx < -1e-10) nearest = (target.radius - target.x) / dx;
@@ -448,24 +458,82 @@ function forwardClearance(target, world) {
   return nearest;
 }
 
-function beginAvoid(target, motion, world) {
-  motion.scanDirection = nextTargetRandom(motion) < 0.5 ? -1 : 1;
-  motion.avoidRemaining = 2.3 + nextTargetRandom(motion) * 0.4;
-  // Keep this bearing fixed: a turn along the obstruction must be completable.
-  motion.avoidAngle = angleDifference(target.angle + motion.scanDirection * Math.PI / 2, 0);
-  motion.resumeSpeed = Math.min(motion.resumeSpeed, TARGET_WALK_MAX);
-  motion.desiredSpeed = 0;
-  chooseTargetGoal(target, world);
+function nearestObstructionAngle(target, world) {
+  let nearest = Infinity;
+  let awayX = 0;
+  let awayY = 0;
+  const consider = (x, y) => {
+    const distance = Math.hypot(target.x - x, target.y - y);
+    if (distance < nearest) {
+      nearest = distance;
+      awayX = target.x - x;
+      awayY = target.y - y;
+    }
+  };
+  for (const wall of world.walls)
+    consider(clamp(target.x, wall.x, wall.x + wall.w), clamp(target.y, wall.y, wall.y + wall.h));
+  consider(0, target.y);
+  consider(WIDTH, target.y);
+  consider(target.x, 0);
+  consider(target.x, HEIGHT);
+  return Math.hypot(awayX, awayY) > 1e-8 ? Math.atan2(awayY, awayX) : target.angle + Math.PI;
+}
+
+function planTargetHeading(target, motion, world, escapeAngle = null) {
+  const goalAngle = Math.atan2(motion.goalY - target.y, motion.goalX - target.x);
+  const centre = escapeAngle ?? goalAngle;
+  const offsets = [0, 0.32, -0.32, 0.64, -0.64, 0.98, -0.98, 1.35, -1.35, 1.75, -1.75, Math.PI];
+  let bestAngle = centre;
+  let bestScore = -Infinity;
+  for (const offset of offsets) {
+    const angle = angleDifference(centre + offset, 0);
+    const clearance = forwardClearance(target, world, angle);
+    const probe = Math.min(34, Math.max(0, clearance - 2));
+    const probeFits = targetFits(target,
+      target.x + Math.cos(angle) * probe,
+      target.y + Math.sin(angle) * probe,
+      world.walls);
+    if (!probeFits) continue;
+    const progress = Math.cos(angleDifference(angle, goalAngle));
+    const continuity = Math.cos(angleDifference(angle, target.angle));
+    // Clearance dominates near a wall, while progress and continuity prevent
+    // needless zig-zags in open floor.
+    const score = Math.min(clearance, 120) + progress * 42 + continuity * 10;
+    if (score > bestScore) {
+      bestScore = score;
+      bestAngle = angle;
+    }
+  }
+  motion.navigationAngle = bestAngle;
+  motion.replanRemaining = TARGET_REPLAN_INTERVAL + nextTargetRandom(motion) * 0.2;
+  motion.scanDirection = Math.sign(angleDifference(bestAngle, target.angle)) || motion.scanDirection;
+  if (escapeAngle !== null || forwardClearance(target, world) < 15)
+    motion.turnHoldRemaining = 0;
+}
+
+function beginAvoid(target, motion, world, forceGoal = false) {
+  if (forceGoal) chooseTargetGoal(target, world);
+  motion.avoidRemaining = 0;
+  motion.avoidAngle = null;
+  motion.desiredSpeed = motion.resumeSpeed;
+  planTargetHeading(target, motion, world, nearestObstructionAngle(target, world));
 }
 
 function stepTarget(target, dt, physics, world) {
   const motion = target.motion ??= targetMotion(seedForId(target.id), target.x, target.y);
   motion.resumeSpeed ??= motion.desiredSpeed;
+  motion.navigationAngle ??= null;
+  motion.replanRemaining ??= 0;
+  motion.stuckElapsed ??= 0;
+  motion.stuckX ??= target.x;
+  motion.stuckY ??= target.y;
+  motion.turnDirection ??= 0;
+  motion.turnHoldRemaining ??= 0;
   motion.phaseRemaining -= dt;
   if (motion.phaseRemaining <= 0) {
     const choice = nextTargetRandom(motion);
     motion.phaseRemaining = choice < 0.22
-      ? 1.2 + nextTargetRandom(motion) * 2.4
+      ? 0.7 + nextTargetRandom(motion) * 1.1
       : 2.5 + nextTargetRandom(motion) * 3.5;
     const nextSpeed = choice < 0.22
       ? 0
@@ -479,49 +547,97 @@ function stepTarget(target, dt, physics, world) {
     motion.scanAngle = nextSpeed === 0 && nextTargetRandom(motion) < 0.55
       ? angleDifference(target.angle + motion.scanDirection * (0.2 + nextTargetRandom(motion) * 0.35), 0)
       : null;
-    if (nextSpeed > 0) chooseTargetGoal(target, world);
+    if (nextSpeed > 0) {
+      chooseTargetGoal(target, world);
+      motion.replanRemaining = 0;
+    }
   }
 
   const distance = Math.hypot(motion.goalX - target.x, motion.goalY - target.y);
-  if (distance < 22 && motion.resumeSpeed > 0) chooseTargetGoal(target, world);
-  let desiredAngle = Math.atan2(motion.goalY - target.y, motion.goalX - target.x);
-  if (motion.desiredSpeed === 0) {
+  if (distance < 22 && motion.resumeSpeed > 0) {
+    chooseTargetGoal(target, world);
+    motion.replanRemaining = 0;
+  }
+  const goalAngle = Math.atan2(motion.goalY - target.y, motion.goalX - target.x);
+  let desiredAngle = goalAngle;
+  if (motion.resumeSpeed === 0) {
     desiredAngle = motion.scanAngle ?? target.angle;
   }
-  if (motion.avoidRemaining > 0) {
-    desiredAngle = motion.avoidAngle ?? target.angle;
-    motion.avoidRemaining -= dt;
-    motion.desiredSpeed = 0;
-    if (motion.avoidRemaining <= 0) {
-      motion.avoidRemaining = 0;
-      motion.avoidAngle = null;
-      motion.desiredSpeed = motion.resumeSpeed;
+  if (motion.resumeSpeed > 0) {
+    motion.replanRemaining -= dt;
+    const directBlocked = segmentBlocked(target, { x: motion.goalX, y: motion.goalY }, world.walls);
+    const clearance = forwardClearance(target, world);
+    if (directBlocked || clearance < 20) {
+      if (motion.replanRemaining <= 0 || motion.navigationAngle === null)
+        planTargetHeading(target, motion, world);
+      desiredAngle = motion.navigationAngle ?? goalAngle;
+    } else {
+      motion.navigationAngle = null;
+      desiredAngle = goalAngle;
     }
   }
-  const turnRate = motion.avoidRemaining > 0 ? 0.7 : TARGET_TURN_RATE;
-  const turn = clamp(angleDifference(desiredAngle, target.angle), -turnRate * dt, turnRate * dt);
+  const turnRate = motion.resumeSpeed === 0 ? TARGET_IDLE_TURN_RATE : TARGET_TURN_RATE;
+  const angleToDesired = angleDifference(desiredAngle, target.angle);
+  let turnDirection = Math.sign(angleToDesired);
+  // A moving goal can straddle the current heading by a fraction of a degree.
+  // Hold the previous turn through that tiny error band so the body does not
+  // visibly wag left/right every render frame.
+  if (turnDirection && motion.turnDirection && turnDirection !== motion.turnDirection &&
+      Math.abs(angleToDesired) < 0.24)
+    turnDirection = 0;
+  motion.turnHoldRemaining = Math.max(0, motion.turnHoldRemaining - dt);
+  if (turnDirection && motion.turnDirection && turnDirection !== motion.turnDirection) {
+    if (motion.turnHoldRemaining > 0) turnDirection = 0;
+    else motion.turnHoldRemaining = 1.2;
+  }
+  if (turnDirection) motion.turnDirection = turnDirection;
+  const turn = turnDirection * Math.min(Math.abs(angleToDesired), turnRate * dt);
   target.angle = angleDifference(target.angle + turn, 0);
-  if (motion.avoidRemaining <= 0 && motion.resumeSpeed > 0) {
-    const clearance = forwardClearance(target, world);
-    const stoppingDistance = motion.speed ** 2 / (2 * TARGET_BRAKING) + 6;
-    if (motion.speed > 1 && clearance < stoppingDistance) beginAvoid(target, motion, world);
-    else {
-      // Start easing off before contact; an actual blocked frame is never a stop.
-      const safeSpeed = Math.sqrt(2 * TARGET_BRAKING * Math.max(0, clearance - 2));
-      motion.desiredSpeed = Math.min(motion.resumeSpeed, safeSpeed);
-    }
+  if (motion.resumeSpeed > 0) {
+    // Brake for the heading being turned onto as well as the one held now: a
+    // course correction must not carry the body into a wall it has yet to face.
+    const ahead = angleDifference(target.angle + turnDirection * turnRate * 0.4, 0);
+    const clearance = Math.min(
+      forwardClearance(target, world),
+      forwardClearance(target, world, ahead),
+    );
+    // Ease down for a tight turn; unlike the former stop state, the active
+    // course correction continues turning and resumes as soon as it is clear.
+    const safeSpeed = Math.sqrt(2 * TARGET_BRAKING * Math.max(0, clearance - 8));
+    motion.desiredSpeed = Math.min(motion.resumeSpeed, safeSpeed);
   }
   const acceleration = motion.desiredSpeed > motion.speed ? TARGET_ACCELERATION : TARGET_BRAKING;
   motion.speed += clamp(motion.desiredSpeed - motion.speed, -acceleration * dt, acceleration * dt);
-  if (motion.speed <= 1e-8) return;
-  const result = physics.moveKinematic(
-    target,
-    Math.cos(target.angle) * motion.speed * dt,
-    Math.sin(target.angle) * motion.speed * dt,
-  );
-  if (result.blockedX || result.blockedY) {
-    // Brake before retrying so a kinematic body never grinds along an obstacle.
-    if (motion.avoidRemaining <= 0) beginAvoid(target, motion, world);
+  if (motion.speed > 1e-8) {
+    const step = motion.speed * dt;
+    const fromX = target.x;
+    const fromY = target.y;
+    const result = physics.moveKinematic(
+      target,
+      Math.cos(target.angle) * step,
+      Math.sin(target.angle) * step,
+    );
+    // Contact is a graze, never a dead stop: the adapter slides the body along
+    // the surface and the speed it actually achieved becomes the speed it
+    // carries, so a brushed wall costs momentum instead of snapping the gait.
+    if (result.blockedX || result.blockedY) {
+      motion.speed = Math.min(motion.speed, Math.hypot(target.x - fromX, target.y - fromY) / dt);
+      if (motion.replanRemaining <= 0) beginAvoid(target, motion, world, true);
+    }
+  }
+  if (motion.resumeSpeed > 0) {
+    motion.stuckElapsed += dt;
+    if (motion.stuckElapsed >= 1) {
+      if (Math.hypot(target.x - motion.stuckX, target.y - motion.stuckY) < 5)
+        beginAvoid(target, motion, world, true);
+      motion.stuckElapsed = 0;
+      motion.stuckX = target.x;
+      motion.stuckY = target.y;
+    }
+  } else {
+    motion.stuckElapsed = 0;
+    motion.stuckX = target.x;
+    motion.stuckY = target.y;
   }
 }
 
@@ -586,8 +702,18 @@ export function stepWorld(
           patrol(officer, 32, tick, physics);
       }
     }
-    for (const target of world.targets)
-      stepTarget(target, tick, physics, world);
+    for (const target of world.targets) {
+      const motion = target.motion ??= targetMotion(seedForId(target.id), target.x, target.y);
+      // Targets integrate on the same 60 Hz locomotion clock regardless of
+      // render cadence. This makes a 120 Hz caller consume two half samples as
+      // one walking step instead of taking a meaningfully different route.
+      motion.stepRemainder = (motion.stepRemainder ?? 0) + tick;
+      if (motion.stepRemainder + 1e-12 >= 1 / 60) {
+        const targetTick = motion.stepRemainder;
+        motion.stepRemainder = 0;
+        stepTarget(target, targetTick, physics, world);
+      }
+    }
     for (const sensor of world.sensors ?? []) {
       if (sensor.state !== "flight") continue;
       flySensor(sensor, tick, sensorPhysics);

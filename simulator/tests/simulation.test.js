@@ -423,7 +423,7 @@ test("target motion has human-scale actual acceleration and modest steering", ()
     });
   }
   assert.ok(peakAcceleration < 200, `peak actual acceleration was ${peakAcceleration}`);
-  assert.ok(totalTurnRate / samples < 0.35, "people mostly walk straight");
+  assert.ok(totalTurnRate / samples < 0.5, "people mostly walk straight between course corrections");
 
   const steering = createWorld(5);
   steering.officers = [];
@@ -476,7 +476,7 @@ test("target facing turns at a capped rate and follows its travel direction", ()
     const before = world.targets.map((target) => ({ x: target.x, y: target.y, angle: target.angle }));
     stepWorld(world, 1 / 60);
     world.targets.forEach((target, index) => {
-      assert.ok(Math.abs(angularDelta(target.angle, before[index].angle)) <= 1.35 / 60 + 1e-9);
+      assert.ok(Math.abs(angularDelta(target.angle, before[index].angle)) <= 2.1 / 60 + 1e-9);
       const dx = target.x - before[index].x;
       const dy = target.y - before[index].y;
       if (Math.hypot(dx, dy) > 0.05)
@@ -489,16 +489,67 @@ test("a target turns away from a wall instead of remaining stuck against it", ()
   const world = createWorld(5);
   const target = world.targets[0];
   Object.assign(target, {
-    x: 523, y: 150, z: 150, angle: 0,
+    x: 515, y: 150, z: 150, angle: 0,
     motion: {
       seed: 0x4f1bbcdc, goalX: 700, goalY: 150, speed: 28, desiredSpeed: 28,
       phaseRemaining: 10, scanDirection: 1, avoidRemaining: 0,
     },
   });
-  const start = { x: target.x, y: target.y };
-  for (let frame = 0; frame < 360; frame++) stepWorld(world, 1 / 60);
-  assert.ok(Math.hypot(target.x - start.x, target.y - start.y) > 25);
+  let pathLength = 0;
+  for (let frame = 0; frame < 360; frame++) {
+    const before = { x: target.x, y: target.y };
+    stepWorld(world, 1 / 60);
+    pathLength += Math.hypot(target.x - before.x, target.y - before.y);
+  }
+  assert.ok(pathLength > 80);
   assert.ok(clearOfWalls(target, world.walls));
+});
+
+test("a close wall-facing target keeps walking until it finds a route around the wall", () => {
+  const world = createWorld(5);
+  world.officers = [];
+  world.targets = [{ id: "T4", x: 515, y: 150, z: 150, angle: 0, radius: 12,
+    motion: { seed: 0x4f1bbcdc, goalX: 700, goalY: 150, speed: 20, desiredSpeed: 32,
+      resumeSpeed: 32, phaseRemaining: 20, scanDirection: 1, scanAngle: null,
+      avoidRemaining: 0, avoidAngle: null } }];
+  const target = world.targets[0];
+  let pathLength = 0;
+  for (let frame = 0; frame < 360; frame++) {
+    const before = { x: target.x, y: target.y };
+    stepWorld(world, 1 / 60);
+    pathLength += Math.hypot(target.x - before.x, target.y - before.y);
+  }
+  assert.ok(pathLength > 80);
+  assert.ok(target.motion.speed > 1, "recovery must not settle at zero speed");
+  assert.ok(clearOfWalls(target, world.walls));
+});
+
+test("targets remain mobile and collision-free through a 60-second wander", () => {
+  const world = createWorld(5);
+  const pathLengths = new Map(world.targets.map((target) => [target.id, 0]));
+  for (let frame = 0; frame < 60 * 60; frame++) {
+    const before = world.targets.map((target) => ({ x: target.x, y: target.y }));
+    stepWorld(world, 1 / 60);
+    world.targets.forEach((target, index) => {
+      pathLengths.set(target.id, pathLengths.get(target.id) +
+        Math.hypot(target.x - before[index].x, target.y - before[index].y));
+      assert.ok(target.x >= target.radius && target.x <= WIDTH - target.radius);
+      assert.ok(target.y >= target.radius && target.y <= HEIGHT - target.radius);
+      assert.ok(clearOfWalls(target, world.walls));
+    });
+  }
+  for (const [id, length] of pathLengths)
+    assert.ok(length > 1_200, `${id} only travelled ${length} world units`);
+});
+
+test("target locomotion is bit-for-bit deterministic across matching steps", () => {
+  const first = createWorld(7);
+  const second = createWorld(7);
+  for (let frame = 0; frame < 60 * 60; frame++) {
+    stepWorld(first, 1 / 60);
+    stepWorld(second, 1 / 60);
+  }
+  assert.deepEqual(first.targets, second.targets);
 });
 
 test("target locomotion never depends on the lab hostile flag", () => {

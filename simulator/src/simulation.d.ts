@@ -47,6 +47,19 @@ export interface TargetMotion {
   avoidRemaining: number;
   avoidAngle?: number | null;
   resumeSpeed?: number;
+  /** Locally planned course used to route around walls and other bodies. */
+  navigationAngle?: number | null;
+  replanRemaining?: number;
+  /** One-second displacement sample used to recover from an obstruction. */
+  stuckElapsed?: number;
+  stuckX?: number | null;
+  stuckY?: number | null;
+  /** Last non-zero steering direction, retained to suppress micro-wagging. */
+  turnDirection?: number;
+  /** Brief reversal cooldown to keep a walking course visually smooth. */
+  turnHoldRemaining?: number;
+  /** Accumulates sub-60 Hz caller ticks for fixed-rate locomotion integration. */
+  stepRemainder?: number;
 }
 /** A thrown mmWave puck. Its own position is unknown until stereo fixes it. */
 export interface DeployedSensor extends Agent {
