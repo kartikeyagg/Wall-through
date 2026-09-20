@@ -53,7 +53,8 @@ test("3D controls retain movement, scanning, reset and team sizing", async ({ pa
 
 test("stereo rig telemetry reacts to the baseline and range controls", async ({ page }) => {
   await pausedScene(page);
-  const readout = page.locator(".vision-readout");
+  // Self localization uses the same readout layout, so scope to this panel.
+  const readout = page.locator(".panel", { hasText: "Stereo rig telemetry" }).locator(".vision-readout");
   await expect(readout).toContainText("BASELINE");
   await expect(readout).toContainText("DISPARITY");
   await expect(readout).toContainText("DEPTH σ");
@@ -153,4 +154,46 @@ test("self localization reports stereo and compass with an optional IMU", async 
   await imu.uncheck();
   await expect(panel).toContainText("STEREO + COMPASS");
   await expect(imu).not.toBeChecked();
+});
+
+test("a thrown puck is tagged by the cameras and reported by the sensor net", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto("/");
+  await expect(page.locator("canvas")).toBeVisible();
+  const panel = page.locator(".panel", { hasText: "mmWave sensor net" });
+  await expect(panel).toContainText("No pucks deployed");
+  await page.getByRole("button", { name: "Throw mmWave sensor" }).click();
+  const puck = panel.locator(".puck").first();
+  await expect(puck).toContainText("M1");
+  // It has to land before anyone can fix it, and be fixed before it is useful.
+  await expect(puck).toContainText("LOCATED", { timeout: 20_000 });
+  await expect(panel.locator(".tiny")).toContainText("1/1 ACTIVE");
+  await expect(panel).toContainText("RADAR REACH");
+  await page.getByRole("button", { name: "Recall sensor M1" }).click();
+  await expect(panel).toContainText("No pucks deployed");
+  expect(errors).toEqual([]);
+});
+
+test("an officer can clear a false positive and put the flag back", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await pausedScene(page);
+  const tracks = page.locator(".panel", { hasText: "Live vision tracks" });
+  await expect(tracks.locator(".contact").first()).toBeVisible();
+  const id = (await tracks.locator(".contact strong").first().innerText()).split(" ")[0];
+  // Key on the id: the list reorders as tracks come and go.
+  const contact = tracks.locator(".contact", { hasText: id });
+  await expect(tracks.locator(".tiny")).toContainText("0 CLEARED");
+  await contact.getByRole("button", { name: `Clear ${id} as a false positive` }).click();
+  await expect(contact).toContainText("CLEARED");
+  await expect(contact).toContainText("cleared by");
+  await expect(tracks.locator(".tiny")).toContainText("1 CLEARED");
+  // The correction is the team's, so another officer's view carries it too.
+  await page.getByRole("button", { name: "Select officer P1", exact: true }).click();
+  await expect(tracks.locator(".contact.cleared")).toHaveCount(1);
+  await contact.getByRole("button", { name: `Re-flag ${id} as a threat` }).click();
+  await expect(tracks.locator(".tiny")).toContainText("0 CLEARED");
+  await expect(tracks.locator(".contact.cleared")).toHaveCount(0);
+  expect(errors).toEqual([]);
 });

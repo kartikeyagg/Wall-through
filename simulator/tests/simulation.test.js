@@ -11,6 +11,9 @@ import {
   awareOf,
   segmentBlocked,
   moveAgent,
+  throwSensor,
+  recallSensor,
+  MAX_SENSORS,
 } from "../src/simulation.js";
 import {
   createSimulatedPoseProvider,
@@ -410,4 +413,73 @@ test("awareness keeps tracks behind the officer that the view filter drops", () 
     false,
   );
   assert.deepEqual(awareOf(world, "nobody", snapshot), []);
+});
+
+const settle = (world, sensor, limit = 900) => {
+  for (let step = 0; step < limit && sensor.state === "flight"; step++)
+    stepWorld(world, 1 / 60, { selectedId: "none" });
+  return sensor;
+};
+
+test("a thrown sensor leaves the hand ahead of the officer and comes to rest", () => {
+  const world = createWorld();
+  const officer = world.officers.find((item) => item.id === "P1");
+  const origin = { x: officer.x, y: officer.y };
+  const sensor = throwSensor(world, "P1", { timestamp: 0 });
+  assert.equal(sensor.ownerId, "P1");
+  assert.equal(sensor.state, "flight");
+  assert.ok(sensor.height > 30, "the puck leaves the hand at eye height");
+  const forward = (sensor.x - origin.x) * Math.cos(officer.angle) + (sensor.y - origin.y) * Math.sin(officer.angle);
+  assert.ok(forward > 0, "it starts ahead of the thrower");
+  settle(world, sensor);
+  assert.equal(sensor.state, "settled");
+  assert.ok(sensor.settledAt > 0);
+  assert.ok(Math.hypot(sensor.vx, sensor.vy) === 0 && sensor.vz === 0);
+  assert.ok(Math.hypot(sensor.x - origin.x, sensor.y - origin.y) > 48, "it travels a usable distance");
+});
+
+test("a settled sensor stays put and never leaves the arena or a wall interior", () => {
+  const world = createWorld();
+  const sensor = settle(world, throwSensor(world, "P4", { timestamp: 0 }));
+  const resting = { x: sensor.x, y: sensor.y };
+  for (let step = 0; step < 120; step++) stepWorld(world, 1 / 60, { selectedId: "none" });
+  assert.deepEqual({ x: sensor.x, y: sensor.y }, resting);
+  assert.ok(sensor.x > 0 && sensor.x < WIDTH && sensor.y > 0 && sensor.y < HEIGHT);
+  assert.equal(
+    world.walls.some((wall) =>
+      sensor.x > wall.x && sensor.x < wall.x + wall.w && sensor.y > wall.y && sensor.y < wall.y + wall.h),
+    false,
+  );
+});
+
+test("the kit holds a limited number of pucks and recall frees a slot", () => {
+  const world = createWorld();
+  for (let index = 0; index < MAX_SENSORS; index++)
+    assert.ok(throwSensor(world, "P1", { timestamp: index }));
+  assert.equal(world.sensors.length, MAX_SENSORS);
+  assert.equal(throwSensor(world, "P1", { timestamp: 99 }), null);
+  const ids = world.sensors.map((item) => item.id);
+  assert.equal(new Set(ids).size, MAX_SENSORS, "ids are unique");
+  assert.equal(recallSensor(world, ids[0]).id, ids[0]);
+  assert.equal(recallSensor(world, "nope"), null);
+  assert.ok(throwSensor(world, "P1", { timestamp: 100 }));
+  assert.equal(throwSensor(world, "nobody", { timestamp: 101 }), null);
+});
+
+test("a track from an officer's own puck stays direct without shared vision", () => {
+  const world = createWorld();
+  const snapshot = observe(world);
+  const radar = snapshot.map((item) => ({ ...item, observers: ["M1"] }));
+  Object.defineProperty(radar, "vision", { value: snapshot.vision });
+  Object.defineProperty(radar, "sensors", { value: [{ id: "M1", ownerId: "P2" }] });
+  assert.equal(awareOf(world, "P2", radar, false).length, radar.length);
+  assert.ok(awareOf(world, "P2", radar, false).every((item) => item.kind === "direct"));
+  assert.equal(awareOf(world, "P1", radar, false).length, 0);
+});
+
+test("only the lab knows which detected body is actually hostile", () => {
+  const world = createWorld();
+  assert.deepEqual(world.targets.map((item) => item.hostile), [true, false, false]);
+  const snapshot = observe(world);
+  assert.equal(snapshot.some((item) => "hostile" in item), false);
 });

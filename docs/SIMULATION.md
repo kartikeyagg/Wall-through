@@ -62,8 +62,48 @@ Arrows only appear for real tracks: the officer's own, plus teammates' when **Sh
 | Direction arrows | In glasses view, point an arrow toward every known target, including those behind the officer |
 | Skeleton overlay | Draw 18-joint body poses for resolved subjects |
 | Overlay opacity | Ceiling alpha for teammate-published skeletons, 0–100% |
+| F / Throw sensor | Throw an mmWave puck along the selected officer's heading |
+| Recall | Remove a deployed puck and return it to the kit |
+| Click a person / Not a terrorist | Toggle that live track between flagged and cleared, attributed to the selected officer |
+| Radar coverage rings | Draw the ground footprint of located puck coverage in the overview |
+| Hide cleared people | Hide cleared track markers while keeping their bodies visible |
 
 Camera range and occlusion apply only to the officer who makes a sensor measurement. A receiving officer still has to face an incoming live track, but is not range-limited. When direct reports stop, a track coasts on predicted motion for a short confidence window before removal instead of becoming a permanent last-known-position marker.
+
+## Thrown-sensor lifecycle
+
+`world.sensors` holds deployed pucks. `throwSensor` creates one ahead of the
+throwing officer at eye height and records that officer as its owner.
+`stepWorld` advances a thrown puck with gravity and air drag, sweeps it against
+the same floor-to-ceiling wall colliders as the people, lets it bounce and
+skid, and marks it settled when it comes to rest. `recallSensor` removes a puck
+from the world; the kit holds at most four deployed sensors.
+
+A settled puck is not immediately useful. The stereo pipeline fixes its known
+marker from visible officer rigs and fuses the fixes into an estimated origin.
+Only a located puck samples its radar from that estimate. See [the mmWave puck
+guide](MMWAVE.md#thrown-mmwave-radar-puck) for the states, localization choices,
+and radar tracking.
+
+Targets also carry a `hostile` flag in this lab world. It is ground truth only:
+it is excluded from sensors, tracks, and officer-facing observations, because
+the exercise is that sensors flag bodies while an officer judges intent.
+
+## Sensor ownership and shared vision
+
+`trackObservations` carries sensor ownership beside its observation array.
+When `visibleTo` projects an observation, a report from a puck an officer
+threw counts as that officer's own measurement. It therefore remains direct
+with **Shared vision** off; a puck owned by another officer remains a teammate
+report. The simulation does not need to know radar internals to make that
+distinction.
+
+## Clearing a false positive
+
+The shared `ThreatRegistry` annotates each live observation before projection.
+A click on a person or its live-track button changes the team-wide state, while
+the original body remains in the scene. See [the threat-tagging guide](THREAT-TAGGING.md#threat-tagging-and-clearance) for the audit record, lost-track grace,
+and lab-only scoring.
 
 ## Sensor-ready architecture
 
