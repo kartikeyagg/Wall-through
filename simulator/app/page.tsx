@@ -37,7 +37,7 @@ export default function Home() {
       const current = world.current!; const config = live.current;
       const dt = previous ? Math.min((now - previous) / 1000, 0.05) : 0; previous = now;
       const pressed = (a: string, b: string) => Number(keys.current.has(a) || keys.current.has(b));
-      if (!config.paused) stepWorld(current, dt * config.speed, { autoPatrol: config.patrol, autoRotate: config.autoRotate, rotationSpeed: config.rotationSpeed * Math.PI / 180, selectedId: config.selected, moveX: pressed("d", "arrowright") - pressed("a", "arrowleft"), moveY: pressed("s", "arrowdown") - pressed("w", "arrowup"), turn: pressed("e", "e") - pressed("q", "q") });
+      if (!config.paused) stepWorld(current, dt * config.speed, { autoPatrol: config.patrol, autoRotate: config.autoRotate, rotationSpeed: config.rotationSpeed * Math.PI / 180, selectedId: config.selected, moveForward: pressed("w", "arrowup") - pressed("s", "arrowdown"), moveRight: pressed("d", "arrowright") - pressed("a", "arrowleft"), turn: pressed("e", "e") - pressed("q", "q") });
       const vision = { range: config.range, fov: config.fov * Math.PI / 180 };
       const { detections, tracks, rig, skeletons, bypassed } = pipeline.current.update(current, current.time * 1000);
       const observations = trackObservations(tracks, vision, skeletons);

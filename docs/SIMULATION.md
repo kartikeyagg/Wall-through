@@ -32,7 +32,7 @@ Arrows only appear for real tracks: the officer's own, plus teammates' when **Sh
 | Control | Purpose |
 | --- | --- |
 | Click a 3D officer / officer button | Select the officer to inspect and move |
-| WASD or arrow keys | Move the selected kinematic body after focusing the 3D scene |
+| WASD or arrow keys | Move the selected kinematic body after focusing the 3D scene. W / Up advances in its current heading, S / Down moves backward, and A / Left and D / Right strafe left and right. |
 | Q / E | Continuously turn the selected officer |
 | Turn left / Turn right | Turn the selected officer 15° (also while paused) |
 | Space or Pause / Resume | Pause or resume movement, scanning, and sensor updates |

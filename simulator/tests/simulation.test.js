@@ -302,6 +302,29 @@ test("diagonal input has the same speed as axial input and invalid timesteps are
   assert.deepEqual(stopped, clone);
 });
 
+test("local movement follows the selected officer's heading, including diagonals", () => {
+  const advance = (angle, input) => {
+    const world = createWorld(5);
+    world.officers = [{ id: "P1", x: 400, y: 200, z: 200, angle, radius: 13 }];
+    world.targets = [];
+    world.walls = [];
+    stepWorld(world, 0.1, { selectedId: "P1", ...input });
+    return world.officers[0];
+  };
+
+  const east = advance(0, { moveForward: 1 });
+  assert.ok(east.x > 400 && Math.abs(east.y - 200) < 1e-8);
+
+  const north = advance(-Math.PI / 2, { moveForward: 1 });
+  assert.ok(north.y < 200 && Math.abs(north.x - 400) < 1e-8);
+
+  const northWest = advance(-3 * Math.PI / 4, { moveForward: 1 });
+  assert.ok(northWest.x < 400 && northWest.y < 200);
+
+  const rightOfNorth = advance(-Math.PI / 2, { moveRight: 1 });
+  assert.ok(rightOfNorth.x > 400 && Math.abs(rightOfNorth.y - 200) < 1e-8);
+});
+
 test("one large timestep matches many fixed ticks without crossing the opaque wall", () => {
   const large = createWorld();
   const small = createWorld();
