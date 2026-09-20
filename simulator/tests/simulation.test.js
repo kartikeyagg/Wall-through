@@ -14,10 +14,32 @@ import {
 } from "../src/simulation.js";
 import {
   createSimulatedPoseProvider,
+  SelfLocalization,
   SensorFusion,
   TrackStore,
   tracksToObservations,
 } from "../src/sensors.js";
+
+test("self localization uses stereo and compass as the primary pose, with optional IMU integration", () => {
+  const world = createWorld(5);
+  const localizer = new SelfLocalization({ stereoPositionError: 0.7, compassError: 0.012, imuWeight: 0.14 });
+  const first = localizer.update(world, 1_000, { imuEnabled: true }).find((item) => item.officerId === "P1");
+  assert.equal(first.sources.stereo, true);
+  assert.equal(first.sources.compass, true);
+  assert.equal(first.sources.imu, true);
+  assert.equal(first.imu, undefined);
+
+  const officer = world.officers[0];
+  officer.x += 20; officer.y += 8; officer.angle += 0.3;
+  const fused = localizer.update(world, 1_100, { imuEnabled: true }).find((item) => item.officerId === "P1");
+  assert.ok(fused.imu);
+  assert.ok(Math.hypot(fused.position.x - officer.x, fused.position.z - officer.y) < 2);
+
+  const stereoCompassOnly = localizer.update(world, 1_200, { imuEnabled: false }).find((item) => item.officerId === "P1");
+  assert.equal(stereoCompassOnly.sources.imu, false);
+  assert.equal(stereoCompassOnly.imu, undefined);
+  assert.ok(Math.hypot(stereoCompassOnly.position.x - officer.x, stereoCompassOnly.position.z - officer.y) <= 1);
+});
 
 test("world contains 5–10 officers and exactly three targets", () => {
   for (const [requested, expected] of [
@@ -300,6 +322,29 @@ test("diagonal input has the same speed as axial input and invalid timesteps are
   stepWorld(stopped, NaN);
   stepWorld(stopped, -1);
   assert.deepEqual(stopped, clone);
+});
+
+test("local movement follows the selected officer's heading, including diagonals", () => {
+  const advance = (angle, input) => {
+    const world = createWorld(5);
+    world.officers = [{ id: "P1", x: 400, y: 200, z: 200, angle, radius: 13 }];
+    world.targets = [];
+    world.walls = [];
+    stepWorld(world, 0.1, { selectedId: "P1", ...input });
+    return world.officers[0];
+  };
+
+  const east = advance(0, { moveForward: 1 });
+  assert.ok(east.x > 400 && Math.abs(east.y - 200) < 1e-8);
+
+  const north = advance(-Math.PI / 2, { moveForward: 1 });
+  assert.ok(north.y < 200 && Math.abs(north.x - 400) < 1e-8);
+
+  const northWest = advance(-3 * Math.PI / 4, { moveForward: 1 });
+  assert.ok(northWest.x < 400 && northWest.y < 200);
+
+  const rightOfNorth = advance(-Math.PI / 2, { moveRight: 1 });
+  assert.ok(rightOfNorth.x > 400 && Math.abs(rightOfNorth.y - 200) < 1e-8);
 });
 
 test("one large timestep matches many fixed ticks without crossing the opaque wall", () => {

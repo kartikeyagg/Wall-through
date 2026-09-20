@@ -165,6 +165,8 @@ export function stepWorld(
     selectedId = "P2",
     moveX = 0,
     moveY = 0,
+    moveForward = 0,
+    moveRight = 0,
     turn = 0,
   } = {},
 ) {
@@ -176,11 +178,12 @@ export function stepWorld(
   const selected = world.officers.find((officer) => officer.id === selectedId);
   moveX = Number.isFinite(moveX) ? moveX : 0;
   moveY = Number.isFinite(moveY) ? moveY : 0;
+  moveForward = Number.isFinite(moveForward) ? moveForward : 0;
+  moveRight = Number.isFinite(moveRight) ? moveRight : 0;
   turn = Number.isFinite(turn) ? clamp(turn, -1, 1) : 0;
   rotationSpeed = Number.isFinite(rotationSpeed)
     ? clamp(rotationSpeed, 0, Math.PI)
     : Math.PI / 6;
-  const magnitude = Math.max(1, Math.hypot(moveX, moveY));
   for (let i = 0; i < steps; i++) {
     for (const officer of world.officers) {
       const angularSpeed = officer === selected && turn !== 0
@@ -189,10 +192,20 @@ export function stepWorld(
       officer.angle = angleDifference(officer.angle + angularSpeed * tick, 0);
     }
     if (selected) {
+      // Keyboard movement is expressed in the selected officer's frame: forward
+      // follows their gaze, while right is perpendicular to it. World-axis input
+      // remains available for programmatic consumers of the simulation.
+      const forwardX = Math.cos(selected.angle) * moveForward;
+      const forwardY = Math.sin(selected.angle) * moveForward;
+      const rightX = -Math.sin(selected.angle) * moveRight;
+      const rightY = Math.cos(selected.angle) * moveRight;
+      const dx = moveX + forwardX + rightX;
+      const dy = moveY + forwardY + rightY;
+      const magnitude = Math.max(1, Math.hypot(dx, dy));
       physics.moveKinematic(
         selected,
-        (moveX / magnitude) * 130 * tick,
-        (moveY / magnitude) * 130 * tick,
+        (dx / magnitude) * 130 * tick,
+        (dy / magnitude) * 130 * tick,
       );
     }
     if (autoPatrol) {

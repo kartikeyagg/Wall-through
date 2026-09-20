@@ -141,3 +141,16 @@ test("direction arrows toggle in the officer glasses view", async ({ page }) => 
   await page.locator(".three-canvas").screenshot({ path: test.info().outputPath("glasses-no-arrows.png") });
   expect(errors).toEqual([]);
 });
+
+test("self localization reports stereo and compass with an optional IMU", async ({ page }) => {
+  await pausedScene(page);
+  const panel = page.locator(".panel", { hasText: "Self localization" });
+  await expect(panel).toContainText("STEREO + COMPASS + IMU");
+  await expect(panel).toContainText("LOCAL X");
+  await expect(panel).toContainText("COMPASS");
+  const imu = page.getByRole("checkbox", { name: "IMU integration" });
+  await expect(imu).toBeChecked();
+  await imu.uncheck();
+  await expect(panel).toContainText("STEREO + COMPASS");
+  await expect(imu).not.toBeChecked();
+});

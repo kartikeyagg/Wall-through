@@ -6,9 +6,21 @@ Wall Through is a browser-based 3D scene with 5–10 police officers, three movi
 
 The world overview is an inspectable third-person 3D scene. Officer glasses is a first-person 3D camera placed exactly where the selected officer’s stereo rig is: at eye height (the rig's 1.7 m `mountHeight`), looking level along the heading, with the rig's horizontal field of view. What you see in glasses view is the camera's view. In glasses view, only direct contacts, live teammate-shared outlines, and the translucent skeleton overlays teammates publish are rendered.
 
-### The stereo rig is the only sensor
+### The stereo rig is the target-detection sensor
 
 Each officer carries one sensor: the head-mounted stereo camera. Its two glass lenses sit directly over the officer's eyes, so the camera's optical axis and the officer's line of sight are the same. The old line-of-sight `simulated-camera` detection provider has been removed.
+
+### Self localization: stereo map features, compass, then IMU
+
+Every police head rig also has a compass and a compact IMU. `SelfLocalization` in `src/sensors.js` derives a primary self-pose from known static stereo map features (walls and corners) and compass heading. It then applies the IMU's integrated velocity and yaw as a low-weight correction. This order is deliberate: the simulation makes the IMU noticeably noisier than a real unit, so it may smooth a pose but cannot replace stereo and compass.
+
+The **Self localization** panel exposes local X/Z, compass heading, and simulated position error for the selected officer. **IMU integration** is enabled by default; turn it off to use the stereo-map and compass estimate alone. The violet module on the head rig is lit when that integration is enabled; the gold disc is the compass.
+
+### Lightweight people and environment
+
+People are articulated low-poly figures with heads, clothing, arms, and legs that swing as they patrol. Officers use a dark tactical vest; the three moving subjects have distinct clothing and skin tones. The environment uses generated concrete-grid floor and wall-panel textures plus high-contrast safety stripes. These visual details make the first-person stereo scene easier to inspect while keeping the scene small and asset-free.
+
+The current detector remains a deterministic geometric stereo model, not an image classifier: textures do not alter a detection result. They are also the visible reference map represented by the self-localization seam, ready for replacement with real feature matching later.
 
 ### Where each officer is looking
 
@@ -32,7 +44,7 @@ Arrows only appear for real tracks: the officer's own, plus teammates' when **Sh
 | Control | Purpose |
 | --- | --- |
 | Click a 3D officer / officer button | Select the officer to inspect and move |
-| WASD or arrow keys | Move the selected kinematic body after focusing the 3D scene |
+| WASD or arrow keys | Move the selected kinematic body after focusing the 3D scene. W / Up advances in its current heading, S / Down moves backward, and A / Left and D / Right strafe left and right. |
 | Q / E | Continuously turn the selected officer |
 | Turn left / Turn right | Turn the selected officer 15° (also while paused) |
 | Space or Pause / Resume | Pause or resume movement, scanning, and sensor updates |
@@ -45,6 +57,7 @@ Arrows only appear for real tracks: the officer's own, plus teammates' when **Sh
 | Shared vision | Show/hide teammate-provided 3D target outlines |
 | Field of view / range | Adjust the stereo rig's horizontal FOV and operator range cutoff |
 | Stereo baseline | Set the lens separation on the head rig, 2–30 cm |
+| IMU integration | Blend the simulated IMU into the stereo-map and compass self-pose; turn off for stereo + compass only |
 | Movement trails / Velocity vectors | Show each track's recent path and heading arrow |
 | Direction arrows | In glasses view, point an arrow toward every known target, including those behind the officer |
 | Skeleton overlay | Draw 18-joint body poses for resolved subjects |

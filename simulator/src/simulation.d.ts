@@ -39,8 +39,14 @@ export interface StepOptions {
   /** Automatic scan speed in radians per second, clamped to 0–Math.PI. */
   rotationSpeed?: number;
   selectedId?: string;
+  /** World-space horizontal movement, retained for programmatic consumers. */
   moveX?: number;
+  /** World-space vertical movement, retained for programmatic consumers. */
   moveY?: number;
+  /** Local forward/backward movement; positive values follow the selected officer's heading. */
+  moveForward?: number;
+  /** Local strafe movement; positive values move to the selected officer's right. */
+  moveRight?: number;
   turn?: number;
 }
 export function createWorld(count?: number): World;
