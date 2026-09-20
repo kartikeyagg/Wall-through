@@ -18,7 +18,13 @@ The **Self localization** panel exposes local X/Z, compass heading, and simulate
 
 ### Lightweight people and environment
 
-People are articulated low-poly figures with heads, clothing, arms, and legs that swing as they patrol. Officers use a dark tactical vest; the three moving subjects have distinct clothing and skin tones. The environment uses generated concrete-grid floor and wall-panel textures plus high-contrast safety stripes. These visual details make the first-person stereo scene easier to inspect while keeping the scene small and asset-free.
+People are articulated figures with a neck, tapered chest and pelvis, jointed arms and legs, hands, and feet. The walk cycle bends the knee, strikes the heel, counter-swings the arms with the elbow flexed, and counter-rotates the shoulders against the hips; when a person stops, it settles into a weight-shifting idle rather than freezing. Officers use a dark tactical vest; the three moving subjects differ in height, build, and clothing.
+
+Those appearances derive from the person's id alone. Nothing about how a person looks or moves correlates with the lab-only `hostile` flag — if it did, the operator could read ground truth off the screen and the clearing exercise would be meaningless.
+
+They also move like people rather than billiard balls: each person eases between walking, pausing, and hurrying, steers toward a waypoint at a capped turn rate, rounds a wall instead of reflecting off it, and keeps scanning while stopped. The motion is seeded per person, so the simulation stays reproducible.
+
+The environment is generated at load: floor tiles with grout, per-tile tone variation and wear, and walls with panel seams, a chair rail, skirting, and a capped top edge, lit through a matching bump map. These visual details make the first-person stereo scene easier to inspect while keeping the scene small and asset-free.
 
 The current detector remains a deterministic geometric stereo model, not an image classifier: textures do not alter a detection result. They are also the visible reference map represented by the self-localization seam, ready for replacement with real feature matching later.
 
@@ -53,7 +59,8 @@ Arrows only appear for real tracks: the officer's own, plus teammates' when **Sh
 | Ctrl + drag (overview) | Orbit the camera: left/right rotates around the arena, up/down tilts from near-ground to top-down |
 | Ctrl + scroll (overview) | Zoom the overview camera in and out |
 | Double-click (overview) | Reset the overview camera to its default angle and distance |
-| Ctrl + drag (glasses) | Turn the selected officer left/right; the view stays locked to their stereo rig |
+| Click the glasses view | Capture the mouse and steer the officer's heading directly, as in a first-person game; Esc releases it |
+| Ctrl + drag (glasses) | Turn the selected officer left/right without capturing the mouse; the view stays locked to their stereo rig |
 | Shared vision | Show/hide teammate-provided 3D target outlines |
 | Field of view / range | Adjust the stereo rig's horizontal FOV and operator range cutoff |
 | Stereo baseline | Set the lens separation on the head rig, 2–30 cm |
@@ -67,6 +74,8 @@ Arrows only appear for real tracks: the officer's own, plus teammates' when **Sh
 | Click a person / Not a terrorist | Toggle that live track between flagged and cleared, attributed to the selected officer |
 | Radar coverage rings | Draw the ground footprint of located puck coverage in the overview |
 | Hide cleared people | Hide cleared track markers while keeping their bodies visible |
+| Controls / `?` | Open the in-app guide to every keyboard and mouse binding; Esc closes it |
+| Minimap | Plot the hall, the officers, and the detected tracks — see [the minimap guide](MINIMAP.md) |
 
 Camera range and occlusion apply only to the officer who makes a sensor measurement. A receiving officer still has to face an incoming live track, but is not range-limited. When direct reports stop, a track coasts on predicted motion for a short confidence window before removal instead of becoming a permanent last-known-position marker.
 

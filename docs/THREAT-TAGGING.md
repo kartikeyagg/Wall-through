@@ -24,12 +24,35 @@ retains that original clearance record and adds who restored it and when. The
 revision increments on every change, so a later correction is distinguishable
 from the earlier decision it replaced.
 
-## A clearance survives a lost track
+## A clearance is vouched only while the person is in sight
 
-`graceMs` keeps a correction after a track briefly disappears behind cover.
-Without this grace period, a bystander who steps out of view would reappear as
-a fresh flag and force the officer to repeat the same judgement. The default
-grace period is 6000 ms.
+An officer clearing a body is vouching for a person they can see. Once that
+person passes out of sensor sight, nobody can vouch for who walks back in, so
+the clearance lapses and the body is flagged again on reappearance. The
+conservative default is the safe one: the cost of re-asking is a nuisance, and
+the cost of a stale clearance is a hostile waved through.
+
+`observeSight(inSightTrackIds, timestamp)` is told each frame which tracks a
+live sensor currently resolves. Sight means a live measurement, not a
+prediction: the motion tracker keeps coasting a track after every sensor has
+lost it, and a coasting track is *not* in sight. Without that distinction a
+cleared bystander could walk behind a wall and stay cleared on the strength of
+the filter's own extrapolation.
+
+A cleared track out of sight for longer than `sightGraceMs` reverts to
+`hostile`. The default is 1200 ms, long enough that one dropped frame or a
+moment behind a door frame does not make the flag thrash, short enough that
+walking out of the room lapses the clearance.
+
+A lapse is recorded distinctly from an officer's own **Re-flag**: the entry
+keeps the original clearance record and adds `restoredBy: "system"` with
+`restoredReason: "left sight"`, bumping `revision` like any other transition.
+The audit trail therefore shows whether a person put the flag back or the rule
+did. Clearing the track again afterwards works normally.
+
+`graceMs` is a separate, longer-horizon concern: it governs when an entry is
+dropped from the registry altogether rather than when a clearance lapses. Its
+default is 6000 ms.
 
 The registry also has a bounded retention policy. Its default capacity is 256
 entries; when it is full, it evicts the least-recently-seen entry, using change
