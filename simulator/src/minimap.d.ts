@@ -1,0 +1,12 @@
+export type MapPoint = { x: number; y: number };
+export type MapSize = { width: number; height: number };
+export type MapView = { center: MapPoint; scale: number; rotation: number; size: MapSize };
+export type Blip = { id: string; kind: "officer" | "target" | "sensor"; x: number; y: number; heading?: number; state: string; selected: boolean; source?: "direct" | "shared"; modality?: "radar-only" | "stereo-fused"; coasting?: boolean };
+export const MIN_SCALE: number;
+export const MAX_SCALE: number;
+export function worldToMinimap(point: MapPoint, view: MapView): MapPoint;
+export function minimapToWorld(pixel: MapPoint, view: MapView): MapPoint;
+export function collectBlips(input: { localizations: import("./sensors.js").LocalizationEstimate[]; contacts: import("./SimulationScene").VisionContact[]; sensors: import("./SimulationScene").SensorReport[]; selectedId?: string }): Blip[];
+export function clampView(view: MapView, world?: { width?: number; height?: number; WIDTH?: number; HEIGHT?: number }): MapView;
+export function fitView(world?: { width?: number; height?: number; WIDTH?: number; HEIGHT?: number }, size?: MapSize, rotation?: number): MapView;
+export function hitTest(pixel: MapPoint, blips: Blip[], view: MapView, radius?: number): Blip | undefined;

@@ -2,7 +2,7 @@ import { test, expect, type Page } from "@playwright/test";
 
 async function pausedScene(page: Page) {
   await page.goto("/");
-  await expect(page.locator("canvas")).toBeVisible();
+  await expect(page.locator(".three-canvas canvas")).toBeVisible();
   await expect(page.locator(".map-state time")).not.toHaveText("0.0s");
   await page.getByRole("button", { name: "Pause", exact: false }).click();
   await page.getByRole("button", { name: "Reset scene", exact: false }).click();
@@ -46,7 +46,7 @@ test("3D controls retain movement, scanning, reset and team sizing", async ({ pa
   const stopped = await heading.textContent();
   await page.waitForTimeout(250);
   await expect(heading).toHaveText(stopped!);
-  await page.locator("canvas").focus();
+  await page.locator(".three-canvas canvas").focus();
   await page.keyboard.press("Space");
   await expect(page.locator(".map-state")).toContainText("PAUSED");
 });
@@ -71,7 +71,7 @@ test("stereo rig telemetry reacts to the baseline and range controls", async ({ 
 
 test("movement marking exposes live speed, heading and motion toggles", async ({ page }) => {
   await page.goto("/");
-  await expect(page.locator("canvas")).toBeVisible();
+  await expect(page.locator(".three-canvas canvas")).toBeVisible();
   await page.getByRole("switch", { name: "Shared vision" }).check();
   const motion = page.locator(".contact .motion").first();
   await expect(motion).toBeVisible();
@@ -160,7 +160,7 @@ test("a thrown puck is tagged by the cameras and reported by the sensor net", as
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto("/");
-  await expect(page.locator("canvas")).toBeVisible();
+  await expect(page.locator(".three-canvas canvas")).toBeVisible();
   const panel = page.locator(".panel", { hasText: "mmWave sensor net" });
   await expect(panel).toContainText("No pucks deployed");
   await page.getByRole("button", { name: "Throw mmWave sensor" }).click();
@@ -195,5 +195,47 @@ test("an officer can clear a false positive and put the flag back", async ({ pag
   await contact.getByRole("button", { name: `Re-flag ${id} as a threat` }).click();
   await expect(tracks.locator(".tiny")).toContainText("0 CLEARED");
   await expect(tracks.locator(".contact.cleared")).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
+test("the controls guide lists the keyboard and mouse bindings", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto("/");
+  await expect(page.locator(".three-canvas canvas")).toBeVisible();
+  const trigger = page.getByRole("button", { name: "Show keyboard and mouse controls" });
+  await expect(trigger).toHaveAttribute("aria-expanded", "false");
+  await trigger.click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+  // Every context an operator drives the sim from has to be represented.
+  for (const group of ["Movement", "Looking around", "Sensors", "World overview camera", "Minimap", "Simulation"])
+    await expect(dialog).toContainText(group);
+  await expect(dialog).toContainText("Throw an mmWave sensor puck");
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+  // The guide is also reachable without hunting for the button.
+  await page.keyboard.press("?");
+  await expect(page.getByRole("dialog")).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test("the minimap plots self-localized officers and detected tracks", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await pausedScene(page);
+  const minimap = page.locator(".minimap");
+  await expect(minimap.locator("canvas")).toBeVisible();
+  // It reports what the team knows, so officers and live tracks must both reach it.
+  await expect(minimap).toContainText(/OFFICER/i);
+  const headingUp = page.getByRole("button", { name: "Toggle heading-up map" });
+  await expect(headingUp).toHaveAttribute("aria-pressed", "true");
+  await headingUp.click();
+  await expect(headingUp).toHaveAttribute("aria-pressed", "false");
+  const expand = page.getByRole("button", { name: "Expand tactical minimap" });
+  await expand.click();
+  await expect(minimap).toHaveClass(/minimap--expanded/);
+  await page.getByRole("button", { name: "Collapse tactical minimap" }).click();
+  await expect(minimap).not.toHaveClass(/minimap--expanded/);
   expect(errors).toEqual([]);
 });
