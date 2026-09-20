@@ -108,7 +108,7 @@ test("capture rate measures recent simulated camera exposures", () => {
   assert.ok(Math.abs(frame.captureRate - 10) < 0.01);
 });
 
-test("skipped stereo frames retain display data while tracks coast", () => {
+test("a track between exposures is still the one the last exposure resolved", () => {
   const world = scene([officer("P1", 0, 0)], [target("T1", 120, 0)]);
   const pipeline = new StereoVisionPipeline({ noise: false, fps: 10 });
   const captured = pipeline.update(world, 0);
@@ -117,7 +117,26 @@ test("skipped stereo frames retain display data while tracks coast", () => {
   assert.equal(skipped.detections, captured.detections);
   assert.equal(skipped.skeletons, captured.skeletons);
   assert.equal(skipped.tracks.length, 1);
-  assert.equal(skipped.tracks[0].coasting, true);
+  // A rig that has not looked yet has not lost anyone: the operator sees the
+  // observers of the last exposure rather than a target nobody can resolve.
+  assert.equal(skipped.tracks[0].coasting, false);
+  assert.deepEqual(skipped.tracks[0].observers, ["P1"]);
+});
+
+test("a track goes coasting once the rig misses an exposure it owed", () => {
+  const world = scene([officer("P1", 0, 0)], [target("T1", 120, 0)]);
+  const pipeline = new StereoVisionPipeline({ noise: false, fps: 10 });
+  pipeline.update(world, 0);
+  world.targets[0].x = 2000; // walked out of every camera's reach
+  const overdue = pipeline.update(world, 260);
+  assert.equal(overdue.captured, true);
+  // `coasting` is the liveness signal; the tracker leaves the last observers
+  // attached to a track it is only predicting.
+  assert.equal(overdue.tracks[0].coasting, true);
+  // The hold expires with the exposure it belonged to, so the stale frame that
+  // follows cannot resurrect those observers.
+  const after = pipeline.update(world, 276);
+  assert.equal(after.tracks[0].coasting, true);
 });
 
 test("reset arms the next stereo update for capture", () => {

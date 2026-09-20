@@ -101,10 +101,13 @@ capped rig behaves the same whatever the render loop is doing.
 
 On a frame between exposures the rig contributes nothing: no detection, no pose
 estimate, no overlay publication. The thrown pucks keep sampling and the motion
-filter keeps running, so a radar-backed track stays live while a stereo-only
-track coasts on its constant-velocity prediction until the next exposure. That is
-the trade the slider exists to show — drop to a few frames a second and watch
-tracks lag their bodies, skeleton overlays age, and clearances lapse sooner.
+filter keeps running, so a radar-backed track keeps being corrected while a
+stereo-only track runs on its constant-velocity prediction until the next
+exposure. A rig that has not looked yet has not lost anyone, so such a track
+carries the observers of its last exposure and is only marked coasting once the
+rig misses an exposure it owed. That is the trade the slider exists to show —
+drop to a few frames a second and watch tracks lag their bodies, skeleton
+overlays age, and clearances lapse sooner.
 
 **CAMERA FPS** in the Stereo rig telemetry panel reports the rate the rig is
 *achieving*, measured over the last second of exposures, not the rate requested.

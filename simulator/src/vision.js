@@ -313,6 +313,7 @@ export class StereoVisionPipeline {
     this.fps = cappedFps(options.fps);
     this.lastCaptureAt = null;
     this.nextCaptureAt = null;
+    this.exposure = new Map();
     this.captureTimestamps = [];
   }
 
@@ -335,6 +336,7 @@ export class StereoVisionPipeline {
     this.fps = cappedFps(this.options.fps);
     this.lastCaptureAt = null;
     this.nextCaptureAt = null;
+    this.exposure = new Map();
     this.captureTimestamps = [];
   }
 
@@ -379,6 +381,7 @@ export class StereoVisionPipeline {
     const radar = this.radarFrame(world, timestamp, this.tracker.snapshot());
     measurements.push(...radar.measurements);
     const tracks = this.tracker.update(measurements, timestamp);
+    this.holdExposure(tracks, captured, interval);
     if (captured && this.options.poses !== false) {
       const tracksById = new Map(tracks.map((track) => [track.trackId, track]));
       const officersById = new Map(world.officers.map((officer) => [officer.id, officer]));
@@ -443,6 +446,35 @@ export class StereoVisionPipeline {
       fps: this.fps,
       captureRate: Number.isFinite(captureRate) ? captureRate : 0,
     };
+  }
+
+  /**
+   * Between exposures a capped rig has not lost anyone: it simply has not
+   * looked yet. A track carries the observers of its last exposure until the
+   * next one falls due, so a slow camera reads as a slow camera rather than as
+   * a target nobody can resolve — without it the operator's panel flickers
+   * between live and predicted on every frame the rig sits idle. A track that
+   * was already coasting at that exposure, or one a puck is still correcting,
+   * keeps what the filter says about it.
+   */
+  holdExposure(tracks, captured, interval) {
+    if (captured) {
+      this.exposure = new Map(tracks.map((track) => [track.trackId, {
+        observers: [...track.observers],
+        sources: [...track.sources],
+        coasting: track.coasting,
+      }]));
+      return;
+    }
+    if (!interval) return;
+    for (const track of tracks) {
+      const last = this.exposure.get(track.trackId);
+      if (!track.coasting || !last || last.coasting) continue;
+      if (track.missedMs > interval * 1.5) continue;
+      track.observers = [...last.observers];
+      track.sources = [...last.sources];
+      track.coasting = false;
+    }
   }
 
   /**
@@ -577,6 +609,7 @@ export class StereoVisionPipeline {
     this.bypassed = 0;
     this.lastCaptureAt = null;
     this.nextCaptureAt = null;
+    this.exposure = new Map();
     this.captureTimestamps = [];
   }
 }

@@ -69,6 +69,22 @@ test("stereo rig telemetry reacts to the baseline and range controls", async ({ 
   await expect.poll(reach).toBeLessThan(wide);
 });
 
+test("the camera frame rate slider retimes the rigs and reports what they achieve", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator(".three-canvas canvas")).toBeVisible();
+  const readout = page.locator(".panel", { hasText: "Stereo rig telemetry" }).locator(".vision-readout");
+  const reported = async () => Number((await readout.locator("div", { hasText: "CAMERA FPS" }).first().innerText()).replace(/[^\d.]/g, ""));
+  const slider = page.getByRole("slider", { name: "Camera frame rate" });
+  await expect(slider).toHaveValue("30");
+  // The readout is the rate the rigs reach, so it follows the slider down.
+  await slider.fill("5");
+  await expect.poll(reported, { timeout: 15_000 }).toBeLessThan(8);
+  await slider.fill("30");
+  await expect.poll(reported, { timeout: 15_000 }).toBeGreaterThan(12);
+  // Retiming the rig must not cost the officer the tracks they already hold.
+  await expect(page.locator(".contacts")).not.toContainText("No confirmed live tracks");
+});
+
 test("movement marking exposes live speed, heading and motion toggles", async ({ page }) => {
   await page.goto("/");
   await expect(page.locator(".three-canvas canvas")).toBeVisible();
