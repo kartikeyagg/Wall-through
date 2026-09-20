@@ -80,6 +80,57 @@ test("two officers fuse reports into one track with both observers", () => {
   assert.deepEqual(frame.tracks[0].observers.sort(), ["P1", "P2"]);
 });
 
+test("an uncapped pipeline captures stereo on every update", () => {
+  const world = scene([officer("P1", 0, 0)], [target("T1", 120, 0)]);
+  const pipeline = new StereoVisionPipeline({ noise: false });
+  const first = pipeline.update(world, 0);
+  const second = pipeline.update(world, 1000 / 60);
+  assert.equal(first.captured, true);
+  assert.equal(second.captured, true);
+  assert.equal(first.fps, null);
+  assert.equal(second.detections.length, 1);
+});
+
+test("a capped rig exposes roughly one stereo frame per requested interval", () => {
+  const world = scene([officer("P1", 0, 0)], [target("T1", 120, 0)]);
+  const pipeline = new StereoVisionPipeline({ noise: false, fps: 10 });
+  const frames = Array.from({ length: 61 }, (_, index) => pipeline.update(world, index * 1000 / 60));
+  const captures = frames.filter((frame) => frame.captured).length;
+  assert.ok(captures >= 9 && captures <= 11, `expected about 10 captures, got ${captures}`);
+  assert.ok(frames.some((frame) => !frame.captured));
+});
+
+test("capture rate measures recent simulated camera exposures", () => {
+  const world = scene([officer("P1", 0, 0)], [target("T1", 120, 0)]);
+  const pipeline = new StereoVisionPipeline({ noise: false, fps: 10 });
+  let frame;
+  for (let timestamp = 0; timestamp <= 1000; timestamp += 100) frame = pipeline.update(world, timestamp);
+  assert.ok(Math.abs(frame.captureRate - 10) < 0.01);
+});
+
+test("skipped stereo frames retain display data while tracks coast", () => {
+  const world = scene([officer("P1", 0, 0)], [target("T1", 120, 0)]);
+  const pipeline = new StereoVisionPipeline({ noise: false, fps: 10 });
+  const captured = pipeline.update(world, 0);
+  const skipped = pipeline.update(world, 1000 / 60);
+  assert.equal(skipped.captured, false);
+  assert.equal(skipped.detections, captured.detections);
+  assert.equal(skipped.skeletons, captured.skeletons);
+  assert.equal(skipped.tracks.length, 1);
+  assert.equal(skipped.tracks[0].coasting, true);
+});
+
+test("reset arms the next stereo update for capture", () => {
+  const world = scene([officer("P1", 0, 0)], [target("T1", 120, 0)]);
+  const pipeline = new StereoVisionPipeline({ noise: false, fps: 10 });
+  pipeline.update(world, 0);
+  pipeline.update(world, 1000 / 60);
+  pipeline.reset();
+  const frame = pipeline.update(world, 1000 / 30);
+  assert.equal(frame.captured, true);
+  assert.equal(frame.captureRate, 0);
+});
+
 test("successive patrol frames produce a moving track", () => {
   const world = createWorld(5);
   world.officers = [world.officers[0]];
@@ -371,14 +422,20 @@ test("one puck holds one radar track per body instead of breeding ghosts", () =>
   const world = createWorld();
   const pipeline = new StereoVisionPipeline({ rig: { baseline: 0.08 }, fov: 117 * Math.PI / 180, range: 420 });
   throwSensor(world, "P2", { timestamp: 0 });
-  const ids = new Set();
+  const lifetimes = new Map();
   let mostAtOnce = 0;
   fly(world, pipeline, 1500, (frame) => {
-    for (const track of frame.radarTracks) ids.add(track.trackId);
+    for (const track of frame.radarTracks)
+      lifetimes.set(track.trackId, (lifetimes.get(track.trackId) ?? 0) + 1);
     mostAtOnce = Math.max(mostAtOnce, frame.radarTracks.length);
   });
   // Three bodies exist; a filter that rejects good returns during a turn spawns
-  // a rival track each time and the count runs away.
-  assert.ok(ids.size <= world.targets.length, `expected at most ${world.targets.length} radar tracks over the run, got ${ids.size}`);
+  // a rival track each time and the count runs away. A body that walks out of
+  // the puck's reach and comes back is a second id for the same person, so the
+  // ghost signature is concurrency and churn, not the lifetime id count: a
+  // rival track is born beside a live one and dies young.
   assert.ok(mostAtOnce <= world.targets.length, `expected at most ${world.targets.length} live at once, got ${mostAtOnce}`);
+  assert.ok(lifetimes.size <= world.targets.length * 2, `expected few re-acquisitions, got ${lifetimes.size} radar tracks`);
+  for (const [trackId, frames] of lifetimes)
+    assert.ok(frames > 120, `${trackId} lived only ${frames} frames, which is track churn rather than a re-acquisition`);
 });

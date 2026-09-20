@@ -31,6 +31,10 @@ export const unitsToMetres = (units) => units / UNITS_PER_METRE;
 export const metresToUnits = (metres) => metres * UNITS_PER_METRE;
 const TARGET_HEIGHT_UNITS = metresToUnits(TARGET_HEIGHT_METRES);
 
+function cappedFps(fps) {
+  return Number.isFinite(fps) && fps > 0 ? fps : null;
+}
+
 function rigFor(options = {}) {
   const config = { ...options.rig };
   if (Number.isFinite(options.fov)) config.hfov = options.fov * 180 / Math.PI;
@@ -304,6 +308,12 @@ export class StereoVisionPipeline {
     this.motion = new Map();
     this.lastFix = new Map();
     this.detections = [];
+    this.skeletons = [];
+    this.bypassed = 0;
+    this.fps = cappedFps(options.fps);
+    this.lastCaptureAt = null;
+    this.nextCaptureAt = null;
+    this.captureTimestamps = [];
   }
 
   configure(options) {
@@ -312,43 +322,64 @@ export class StereoVisionPipeline {
       ...options,
       rig: options.rig ? { ...this.options.rig, ...options.rig } : this.options.rig,
     };
-    this.rig = rigFor(this.options);
-    this.markerRig = markerRig(this.rig);
+    // An exposure setting should not disturb the rig or its live tracks.
+    if (options.rig !== undefined || options.fov !== undefined) {
+      this.rig = rigFor(this.options);
+      this.markerRig = markerRig(this.rig);
+    }
     if (options.radar !== undefined) this.radar = createMmWaveRadar(this.options.radar);
     if (options.tracker !== undefined) this.tracker = new MotionTracker(options.tracker);
     if (options.skeleton !== undefined)
       this.poser = new SkeletonPoser({ height: TARGET_HEIGHT_UNITS, ...options.skeleton });
     if (options.overlay !== undefined) this.overlays = new OverlayBus(options.overlay);
+    this.fps = cappedFps(this.options.fps);
+    this.lastCaptureAt = null;
+    this.nextCaptureAt = null;
+    this.captureTimestamps = [];
   }
 
   update(world, timestamp = world.time * 1000) {
+    // Exposures are scheduled on a running deadline rather than measured from
+    // the last one: at 30 fps on a 60 Hz loop the two grids line up exactly, and
+    // timing each interval from the previous capture lets float error push every
+    // few exposures onto the following frame, which alone costs a fifth of the
+    // requested rate.
+    const interval = this.fps === null ? 0 : 1000 / this.fps;
+    const captured = this.fps === null || this.nextCaptureAt === null
+      || timestamp >= this.nextCaptureAt - interval * 1e-6;
     const feeds = [];
-    const detections = detectWith(
-      world,
-      this.options,
-      timestamp,
-      this.rig,
-      this.random,
-      (officerId, frameTimestamp) => this.overlaysFor(officerId, frameTimestamp),
-      feeds,
-    );
-    const measurements = detections.map((detection) => ({
-      trackId: detection.trackId,
-      position: detection.position,
-      sigma: detection.sigma,
-      timestamp: detection.timestamp,
-      officerId: detection.officerId,
-      confidence: detection.confidence,
-      outline: detection.outline,
-      source: "stereo",
-    }));
+    let detections = this.detections;
+    let skeletons = this.skeletons;
+    let bypassed = this.bypassed;
+    const measurements = [];
+    if (captured) {
+      detections = detectWith(
+        world,
+        this.options,
+        timestamp,
+        this.rig,
+        this.random,
+        (officerId, frameTimestamp) => this.overlaysFor(officerId, frameTimestamp),
+        feeds,
+      );
+      measurements.push(...detections.map((detection) => ({
+        trackId: detection.trackId,
+        position: detection.position,
+        sigma: detection.sigma,
+        timestamp: detection.timestamp,
+        officerId: detection.officerId,
+        confidence: detection.confidence,
+        outline: detection.outline,
+        source: "stereo",
+      })));
+    }
     // Radar association runs against last frame's tracks, the prior every
     // association step is entitled to, so both modalities correct the same
     // filter in one update.
     const radar = this.radarFrame(world, timestamp, this.tracker.snapshot());
     measurements.push(...radar.measurements);
     const tracks = this.tracker.update(measurements, timestamp);
-    if (this.options.poses !== false) {
+    if (captured && this.options.poses !== false) {
       const tracksById = new Map(tracks.map((track) => [track.trackId, track]));
       const officersById = new Map(world.officers.map((officer) => [officer.id, officer]));
       const models = this.poser.pose(detections.map((detection) => {
@@ -376,21 +407,41 @@ export class StereoVisionPipeline {
         );
       }
     }
-    const skeletons = this.options.poses === false ? [] : detections.flatMap((detection) => {
-      const skeleton = detection.skeleton;
-      return skeleton ? [publishSkeleton(detection.officerId, skeleton, timestamp, detection.confidence)] : [];
-    });
-    if (this.options.poses !== false) this.overlays.publish(skeletons, timestamp);
-    this.detections = detections;
+    if (captured) {
+      skeletons = this.options.poses === false ? [] : detections.flatMap((detection) => {
+        const skeleton = detection.skeleton;
+        return skeleton ? [publishSkeleton(detection.officerId, skeleton, timestamp, detection.confidence)] : [];
+      });
+      if (this.options.poses !== false) this.overlays.publish(skeletons, timestamp);
+      this.detections = detections;
+      this.skeletons = skeletons;
+      this.bypassed = feeds.reduce((count, feed) => count + feed.overlays.length, 0);
+      bypassed = this.bypassed;
+      this.lastCaptureAt = timestamp;
+      // A loop that stalled past a whole interval resynchronises instead of
+      // firing a burst of exposures to catch up on time the rig never saw.
+      this.nextCaptureAt = this.nextCaptureAt === null || timestamp - this.nextCaptureAt > interval
+        ? timestamp + interval
+        : this.nextCaptureAt + interval;
+      this.captureTimestamps.push(timestamp);
+      // Old exposures would make a stopped rig look healthy.
+      this.captureTimestamps = this.captureTimestamps.filter((capturedAt) => timestamp - capturedAt <= 1000);
+    }
+    const captureRate = this.captureTimestamps.length < 2 ? 0
+      : (this.captureTimestamps.length - 1) * 1000
+        / (this.captureTimestamps.at(-1) - this.captureTimestamps[0]);
     return {
       detections,
       tracks,
       rig: this.rig,
       skeletons,
-      bypassed: feeds.reduce((count, feed) => count + feed.overlays.length, 0),
+      bypassed,
       sensors: radar.sensors,
       radarTracks: radar.tracks,
       radarReturns: radar.returns,
+      captured,
+      fps: this.fps,
+      captureRate: Number.isFinite(captureRate) ? captureRate : 0,
     };
   }
 
@@ -522,6 +573,11 @@ export class StereoVisionPipeline {
     this.motion.clear();
     this.lastFix.clear();
     this.detections = [];
+    this.skeletons = [];
+    this.bypassed = 0;
+    this.lastCaptureAt = null;
+    this.nextCaptureAt = null;
+    this.captureTimestamps = [];
   }
 }
 

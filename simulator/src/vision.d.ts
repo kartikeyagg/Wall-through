@@ -42,6 +42,8 @@ export interface VisionOptions {
   range?: number;
   /** Horizontal field of view in radians; overrides `rig.hfov` when present. */
   fov?: number;
+  /** Stereo capture cap in frames per second; zero or invalid values are uncapped. */
+  fps?: number | null;
   /** Seed for the deterministic matcher-noise stream. */
   seed?: number;
   /** Set false to disable matcher noise (exact triangulation). */
@@ -113,6 +115,12 @@ export interface VisionFrame {
   radarTracks: RadarTrack[];
   /** Raw radar returns across all pucks this frame. */
   radarReturns: number;
+  /** Whether the stereo rig captured and processed this frame. */
+  captured: boolean;
+  /** Configured stereo capture cap, or null when the rig is uncapped. */
+  fps: number | null;
+  /** Actual recent stereo capture rate in frames per second. */
+  captureRate: number;
 }
 /** Stateful per-frame pipeline: detect, then fuse into motion tracks. */
 export class StereoVisionPipeline {
