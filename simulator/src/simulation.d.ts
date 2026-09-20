@@ -20,6 +20,19 @@ export interface Wall extends Point {
 export interface Target extends Agent {
   /** Lab ground truth. Never read by sensors, tracks or anything officer-facing. */
   hostile?: boolean;
+  /** Private deterministic locomotion state; callers may ignore it. */
+  motion?: TargetMotion;
+}
+export interface TargetMotion {
+  seed: number;
+  goalX: number;
+  goalY: number;
+  /** Current ground speed in world units per second. */
+  speed: number;
+  desiredSpeed: number;
+  phaseRemaining: number;
+  scanDirection: number;
+  avoidRemaining: number;
 }
 /** A thrown mmWave puck. Its own position is unknown until stereo fixes it. */
 export interface DeployedSensor extends Agent {

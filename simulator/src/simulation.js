@@ -11,8 +11,38 @@ const GRAVITY = 235;
 const AIR_DRAG = 0.72;
 const BOUNCE = 0.34;
 const RESTING_SPEED = 9;
+const TARGET_WALK_MIN = 24;
+const TARGET_WALK_MAX = 42;
+const TARGET_HURRY_MIN = 48;
+const TARGET_HURRY_MAX = 58;
+const TARGET_ACCELERATION = 30;
+const TARGET_BRAKING = 38;
+const TARGET_TURN_RATE = 1.35;
 const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
 const angleDifference = (a, b) => Math.atan2(Math.sin(a - b), Math.cos(a - b));
+
+// A local PRNG makes wandering repeatable without coupling targets to one another.
+function nextTargetRandom(motion) {
+  let value = motion.seed >>> 0;
+  value ^= value << 13;
+  value ^= value >>> 17;
+  value ^= value << 5;
+  motion.seed = value >>> 0;
+  return motion.seed / 0x100000000;
+}
+
+function targetMotion(seed, goalX, goalY) {
+  return {
+    seed,
+    goalX,
+    goalY,
+    speed: 0,
+    desiredSpeed: TARGET_WALK_MIN,
+    phaseRemaining: 1.5,
+    scanDirection: seed & 1 ? 1 : -1,
+    avoidRemaining: 0,
+  };
+}
 
 export function createWorld(count = 7) {
   const officerCount = clamp(
@@ -46,9 +76,12 @@ export function createWorld(count = 7) {
     // projection may read it: the system flags every detected body, and an
     // officer has to clear the bystanders by hand.
     targets: [
-      { id: "T1", x: 380, y: 210, z: 210, angle: 0.35, radius: 12, hostile: true },
-      { id: "T2", x: 850, y: 160, z: 160, angle: 1.2, radius: 12, hostile: false },
-      { id: "T3", x: 400, y: 540, z: 540, angle: -0.6, radius: 12, hostile: false },
+      { id: "T1", x: 380, y: 210, z: 210, angle: 0.35, radius: 12, hostile: true,
+        motion: targetMotion(0x4f1bbcdc, 470, 205) },
+      { id: "T2", x: 850, y: 160, z: 160, angle: 1.2, radius: 12, hostile: false,
+        motion: targetMotion(0x71e2a9c3, 760, 245) },
+      { id: "T3", x: 400, y: 540, z: 540, angle: -0.6, radius: 12, hostile: false,
+        motion: targetMotion(0x19c84a6d, 340, 470) },
     ],
     sensors: [],
     walls: [
@@ -247,6 +280,85 @@ function patrol(agent, speed, dt, physics) {
   agent.angle = angleDifference(agent.angle, 0);
 }
 
+function targetFits(target, x, y, walls) {
+  if (x < target.radius || y < target.radius || x > WIDTH - target.radius || y > HEIGHT - target.radius)
+    return false;
+  return !walls.some((wall) => {
+    const nearX = clamp(x, wall.x, wall.x + wall.w);
+    const nearY = clamp(y, wall.y, wall.y + wall.h);
+    return Math.hypot(x - nearX, y - nearY) < target.radius + 8;
+  });
+}
+
+function chooseTargetGoal(target, world) {
+  const motion = target.motion;
+  // These spread routes across both sides of the interior partitions.
+  const waypoints = [
+    [130, 120], [280, 180], [440, 250], [680, 150], [840, 245],
+    [150, 430], [300, 520], [470, 440], [580, 560], [770, 540], [900, 420],
+  ];
+  const start = Math.floor(nextTargetRandom(motion) * waypoints.length);
+  for (let offset = 0; offset < waypoints.length; offset++) {
+    const [x, y] = waypoints[(start + offset) % waypoints.length];
+    if (targetFits(target, x, y, world.walls) && !segmentBlocked(target, { x, y }, world.walls)) {
+      motion.goalX = x;
+      motion.goalY = y;
+      return;
+    }
+  }
+  // The current location is always safe; trying again later is safer than clipping a wall.
+  motion.goalX = target.x;
+  motion.goalY = target.y;
+}
+
+function stepTarget(target, dt, physics, world) {
+  const motion = target.motion ??= targetMotion(0x9e3779b9, target.x, target.y);
+  motion.phaseRemaining -= dt;
+  if (motion.phaseRemaining <= 0) {
+    const choice = nextTargetRandom(motion);
+    motion.phaseRemaining = choice < 0.22
+      ? 1.2 + nextTargetRandom(motion) * 2.4
+      : 2.5 + nextTargetRandom(motion) * 3.5;
+    motion.desiredSpeed = choice < 0.22
+      ? 0
+      : choice > 0.88
+        ? TARGET_HURRY_MIN + nextTargetRandom(motion) * (TARGET_HURRY_MAX - TARGET_HURRY_MIN)
+        : TARGET_WALK_MIN + nextTargetRandom(motion) * (TARGET_WALK_MAX - TARGET_WALK_MIN);
+    motion.scanDirection = nextTargetRandom(motion) < 0.5 ? -1 : 1;
+    if (motion.desiredSpeed > 0) chooseTargetGoal(target, world);
+  }
+
+  const distance = Math.hypot(motion.goalX - target.x, motion.goalY - target.y);
+  if (distance < 22 && motion.desiredSpeed > 0) chooseTargetGoal(target, world);
+  let desiredAngle = Math.atan2(motion.goalY - target.y, motion.goalX - target.x);
+  if (motion.desiredSpeed === 0) {
+    // A pause is a look-around, not a frozen mannequin.
+    desiredAngle = target.angle + motion.scanDirection * 0.55;
+  } else if (motion.avoidRemaining > 0) {
+    desiredAngle = target.angle + motion.scanDirection * Math.PI / 2;
+    motion.avoidRemaining -= dt;
+  }
+  const turn = clamp(angleDifference(desiredAngle, target.angle), -TARGET_TURN_RATE * dt, TARGET_TURN_RATE * dt);
+  target.angle = angleDifference(target.angle + turn, 0);
+  const acceleration = motion.desiredSpeed > motion.speed ? TARGET_ACCELERATION : TARGET_BRAKING;
+  motion.speed += clamp(motion.desiredSpeed - motion.speed, -acceleration * dt, acceleration * dt);
+  if (motion.speed <= 1e-8) return;
+  const result = physics.moveKinematic(
+    target,
+    Math.cos(target.angle) * motion.speed * dt,
+    Math.sin(target.angle) * motion.speed * dt,
+  );
+  if (result.blockedX || result.blockedY) {
+    // Turn along an obstruction and select a route rather than reflecting off it.
+    if (motion.avoidRemaining <= 0) {
+      motion.scanDirection = nextTargetRandom(motion) < 0.5 ? -1 : 1;
+      motion.avoidRemaining = 0.8 + nextTargetRandom(motion) * 0.5;
+      motion.desiredSpeed = Math.min(motion.desiredSpeed, TARGET_WALK_MAX);
+      chooseTargetGoal(target, world);
+    }
+  }
+}
+
 export function stepWorld(
   world,
   dt,
@@ -309,7 +421,7 @@ export function stepWorld(
       }
     }
     for (const target of world.targets)
-      patrol(target, 44, tick, physics);
+      stepTarget(target, tick, physics, world);
     for (const sensor of world.sensors ?? []) {
       if (sensor.state !== "flight") continue;
       flySensor(sensor, tick, sensorPhysics);

@@ -305,6 +305,84 @@ test("patrol remains deterministic and collision-free over a long run", () => {
   assert.ok(Math.abs(world.time - 40) < 1e-8);
 });
 
+const clearOfWalls = (agent, walls) => walls.every((wall) => {
+  const x = Math.max(wall.x, Math.min(wall.x + wall.w, agent.x));
+  const y = Math.max(wall.y, Math.min(wall.y + wall.h, agent.y));
+  return Math.hypot(agent.x - x, agent.y - y) >= agent.radius - 1e-7;
+});
+
+test("target locomotion is deterministic, bounded, and clears walls over a long run", () => {
+  const first = createWorld(5);
+  const second = createWorld(5);
+  for (let frame = 0; frame < 1800; frame++) {
+    stepWorld(first, 1 / 60);
+    stepWorld(second, 1 / 60);
+    for (const target of first.targets) {
+      assert.ok(target.x >= target.radius && target.x <= WIDTH - target.radius);
+      assert.ok(target.y >= target.radius && target.y <= HEIGHT - target.radius);
+      assert.ok(clearOfWalls(target, first.walls));
+    }
+  }
+  assert.deepEqual(first.targets, second.targets);
+});
+
+test("target gait eases through pauses, walks, and hurry stretches", () => {
+  const world = createWorld(5);
+  const speeds = [];
+  for (let frame = 0; frame < 1800; frame++) {
+    stepWorld(world, 1 / 60);
+    speeds.push(world.targets[0].motion.speed);
+  }
+  assert.ok(Math.min(...speeds) < 1, "a person pauses");
+  assert.ok(Math.max(...speeds) > 45, "a person occasionally hurries");
+  for (let index = 1; index < speeds.length; index++)
+    assert.ok(Math.abs(speeds[index] - speeds[index - 1]) <= 38 / 60 + 1e-9);
+});
+
+test("target facing turns at a capped rate and follows its travel direction", () => {
+  const world = createWorld(5);
+  for (let frame = 0; frame < 360; frame++) {
+    const before = world.targets.map((target) => ({ x: target.x, y: target.y, angle: target.angle }));
+    stepWorld(world, 1 / 60);
+    world.targets.forEach((target, index) => {
+      assert.ok(Math.abs(angularDelta(target.angle, before[index].angle)) <= 1.35 / 60 + 1e-9);
+      const dx = target.x - before[index].x;
+      const dy = target.y - before[index].y;
+      if (Math.hypot(dx, dy) > 0.05)
+        assert.ok(Math.abs(angularDelta(Math.atan2(dy, dx), target.angle)) < 1e-7);
+    });
+  }
+});
+
+test("a target turns away from a wall instead of remaining stuck against it", () => {
+  const world = createWorld(5);
+  const target = world.targets[0];
+  Object.assign(target, {
+    x: 523, y: 150, z: 150, angle: 0,
+    motion: {
+      seed: 0x4f1bbcdc, goalX: 700, goalY: 150, speed: 28, desiredSpeed: 28,
+      phaseRemaining: 10, scanDirection: 1, avoidRemaining: 0,
+    },
+  });
+  const start = { x: target.x, y: target.y };
+  for (let frame = 0; frame < 360; frame++) stepWorld(world, 1 / 60);
+  assert.ok(Math.hypot(target.x - start.x, target.y - start.y) > 25);
+  assert.ok(clearOfWalls(target, world.walls));
+});
+
+test("target locomotion never depends on the lab hostile flag", () => {
+  const first = createWorld(5);
+  const second = createWorld(5);
+  second.targets.forEach((target) => { target.hostile = !target.hostile; });
+  for (let frame = 0; frame < 600; frame++) {
+    stepWorld(first, 1 / 60);
+    stepWorld(second, 1 / 60);
+  }
+  const withoutGroundTruth = (targets) => targets.map((target) =>
+    Object.fromEntries(Object.entries(target).filter(([key]) => key !== "hostile")));
+  assert.deepEqual(withoutGroundTruth(first.targets), withoutGroundTruth(second.targets));
+});
+
 test("diagonal input has the same speed as axial input and invalid timesteps are ignored", () => {
   const axial = createWorld();
   const diagonal = createWorld();
