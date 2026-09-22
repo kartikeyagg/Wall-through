@@ -50,3 +50,7 @@ npm run build
 For browser checks, install Chromium once with `npx playwright install chromium`, then run `npm run test:browser`.
 
 This is a development demonstration; it does not implement real hardware drivers, real radar hardware or RF modelling, calibration or rectification, trained computer-vision or pose-estimation models, or physical see-through-wall sensing.
+
+## Going real
+
+[The real-world plan](docs/REAL-WORLD-PLAN.md) sets out what a hardware build needs: the officer kit, the thrown radar puck, the team network and the software that replaces each simulator module. It also lists every place the simulator is currently more optimistic than reality, and how to make it realistic while keeping it lag-free on a modest laptop.
