@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { SelfLocalization } from "../src/sensors.js";
+import { createWorld } from "../src/simulation.js";
 
 const distanceError = (estimate, officer) =>
   Math.hypot(estimate.position.x - officer.x, estimate.position.z - officer.y);
@@ -135,4 +136,20 @@ test("localization remains deterministic and keeps the optional IMU contract", (
   const withImu = estimate(withImuLocalizer, subject, 1_000, true);
   assert.ok(withImu.imu);
   assert.equal(withImu.sources.imu, true);
+});
+
+test("GPS improves outdoor position only when enabled and never changes indoor localization", () => {
+  const outdoor = createWorld(7, { environment: "outdoor" });
+  const indoor = createWorld(7);
+  assert.equal(outdoor.walls.length, 0);
+  assert.equal(outdoor.landmarks.length, 0);
+  const bare = new SelfLocalization().update(outdoor, 1_000, { imuEnabled: false })[0];
+  const withGps = new SelfLocalization().update(outdoor, 1_000, { imuEnabled: false, gpsEnabled: true })[0];
+  assert.equal(bare.sources.gps, false);
+  assert.equal(withGps.sources.gps, true);
+  assert.ok(withGps.gps.sigma > 0);
+  assert.ok(distanceError(withGps, outdoor.officers[0]) < distanceError(bare, outdoor.officers[0]));
+  const indoorWithout = new SelfLocalization().update(indoor, 1_000, { imuEnabled: false })[0];
+  const indoorWith = new SelfLocalization().update(indoor, 1_000, { imuEnabled: false, gpsEnabled: true })[0];
+  assert.deepEqual(indoorWith, indoorWithout);
 });

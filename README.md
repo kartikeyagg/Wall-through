@@ -14,6 +14,8 @@ npm run dev
 
 Open the URL printed by the development server. Physical cameras, RealSense, LiDAR, ROS, and a separate simulation service are not required for this phase.
 
+In **Simulation settings**, switch **Environment** to **Open training ground (outdoor)** to try an open-sky scene without walls or mapped landmarks. **GPS position fix** starts off; enable it outdoors to combine a simulated satellite position measurement with the officer's visual estimate. The indoor hall disables GPS. **UWB ranging (future)** is an inactive, off-by-default additional feature. See [the simulation guide](docs/SIMULATION.md#outdoor-gps-and-future-uwb).
+
 ## Try it
 
 Select an officer in the 3D world overview, then choose **Officer glasses** for a first-person view. That view comes from the officer's stereo camera, the only sensor, which sits on their eyes. In the overview, each officer's eyes and gaze ray show where they are looking, and the dot marks what they are looking at ([details](docs/SIMULATION.md#where-each-officer-is-looking)). Directly observed targets appear normally; targets observed by teammates appear as shared 3D outlines through walls. Camera range limits the officer making the sensor measurement, not the receiving officer’s shared outline.
