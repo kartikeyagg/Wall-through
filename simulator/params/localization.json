@@ -1,0 +1,13 @@
+{
+  "stereoPositionError": { "value": 0.7, "source": "guess:S0 legacy indoor fallback" },
+  "compassError": { "value": 0.012, "source": "guess:S0 deterministic compass error" },
+  "imuWeight": { "value": 0.14, "source": "guess:S0 low-weight IMU blend" },
+  "stereoGoodPositionError": { "value": 0.12, "source": "guess:S0 strong landmark fix" },
+  "stereoPoorPositionError": { "value": 1.4, "source": "guess:S0 weak landmark fix" },
+  "landmarkRange": { "value": 420, "source": "guess:S0 mapped-feature range" },
+  "landmarkFov": { "value": 2.0420352248333655, "source": "guess:S0 mapped-feature field of view" },
+  "landmarkQualityScale": { "value": 0.4, "source": "guess:S0 feature quality response" },
+  "lostFixGrowth": { "value": 0.35, "source": "guess:S0 visual-fix loss growth" },
+  "outdoorPositionError": { "value": 120, "source": "guess:S0 5 m visual position error in open sky" },
+  "gpsPositionError": { "value": 48, "source": "guess:S0 2 m simulated outdoor GPS error" }
+}
