@@ -21,8 +21,10 @@ test("trial metrics measure localization and clearance fractions against truth",
   const metrics = new TrialMetrics();
   const world = { time: 1, officers: [{ id: "P1", x: 0, y: 0 }],
     targets: [{ id: "T1", x: 24, y: 0, hostile: true }, { id: "T2", x: 48, y: 0, hostile: false }] };
-  const frame = { tracks: [{ trackId: "T1", position: { x: 24, z: 0 }, timestamp: 900 }], skeletons: [] };
-  metrics.observe(world, [{ officerId: "P1", position: { x: 24, z: 0 } }], frame, new Map([["T1", "cleared"]]));
+  const detection = { trackId: "A1" };
+  Object.defineProperty(detection, "truthId", { value: "T1" });
+  const frame = { tracks: [{ trackId: "A1", position: { x: 24, z: 0 }, timestamp: 900 }], skeletons: [], detections: [detection] };
+  metrics.observe(world, [{ officerId: "P1", position: { x: 24, z: 0 } }], frame, new Map([["A1", "cleared"]]));
   const result = metrics.summary();
   assert.equal(result.localizationRmseM, 1);
   assert.equal(result.dataAgeMeanMs, 100);

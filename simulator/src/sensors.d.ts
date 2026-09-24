@@ -8,6 +8,7 @@ export interface Pose {
 }
 
 export interface LocalizationEstimate extends Pose {
+  headingSigma: number;
   sources: { stereo: true; compass: true; imu: boolean; gps: boolean };
   fix: { quality: number; landmarks: number; spread: number; sigma: number };
   gps?: { sigma: number };

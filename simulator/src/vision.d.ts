@@ -8,6 +8,7 @@ import type { MmWaveRadar, MmWaveTrackerOptions, RadarTrack, SensorLocalizer } f
 import type { CameraPose, StereoRig, StereoRigConfig, Vec3 } from "./stereo.js";
 import type { MotionTrack, TrackerOptions } from "./tracking.js";
 import type { Skeleton, SkeletonOptions } from "./skeleton.js";
+import type { LocalizationEstimate } from "./sensors.js";
 import type { CameraFeed, OverlayBus, OverlayLayer, OverlayOptions, SkeletonFrame } from "./overlay.js";
 /** Simulation ground units per real-world metre. */
 export const UNITS_PER_METRE: number;
@@ -19,6 +20,8 @@ export interface StereoDetection {
   timestamp: number;
   officerId: string;
   trackId: string;
+  /** Simulation scoring only; stored non-enumerably at runtime. */
+  readonly truthId?: string;
   /** Triangulated position in simulation units (x, z on the ground; y up, metres). */
   position: Vec3;
   confidence: number;
@@ -60,6 +63,8 @@ export interface VisionOptions {
   radarTracker?: MmWaveTrackerOptions;
   /** Puck geolocation settings. */
   localizer?: ConstructorParameters<typeof SensorLocalizer>[0];
+  /** Officer self-pose estimates used to place camera measurements in the shared world. */
+  localizations?: LocalizationEstimate[];
 }
 /** One puck's state as the pipeline reports it each frame. */
 export interface SensorReport {
@@ -130,7 +135,7 @@ export class StereoVisionPipeline {
   readonly radar: MmWaveRadar;
   readonly localizer: SensorLocalizer;
   configure(options: VisionOptions): void;
-  update(world: World, timestamp?: number): VisionFrame;
+  update(world: World, timestamp?: number, localizations?: LocalizationEstimate[]): VisionFrame;
   /** Teammate skeleton layers this officer should draw over their feed. */
   overlaysFor(officerId: string, timestamp?: number, options?: OverlayOptions): OverlayLayer[];
   /** This officer's feed: real subjects plus the overlays the detector bypasses. */
@@ -171,7 +176,7 @@ export function fixSensor(
   world: World,
   sensor: DeployedSensor,
   rig: StereoRig,
-  options?: { range?: number; random?: () => number },
+  options?: { range?: number; random?: () => number; localizations?: LocalizationEstimate[] },
   timestamp?: number,
 ): Array<{ position: { x: number; y: number }; sigma: number; officerId: string; timestamp: number }>;
 /** Straight-line occlusion test against the world's opaque walls. */

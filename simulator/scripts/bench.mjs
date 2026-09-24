@@ -11,8 +11,8 @@ const timings = [];
 for (let tick = 0; tick < 3600; tick += 1) {
   const start = performance.now();
   stepWorld(world, 1 / 60, { autoPatrol: true, autoRotate: true });
-  localizer.update(world, world.time * 1000);
-  pipeline.update(world, world.time * 1000);
+  const poses = localizer.update(world, world.time * 1000);
+  pipeline.update(world, world.time * 1000, poses);
   const elapsed = performance.now() - start;
   if (tick >= 60) timings.push(elapsed);
 }

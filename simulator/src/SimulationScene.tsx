@@ -100,6 +100,20 @@ const maxMouseLookDelta = 100;
 const hudDepth = 1, hudRingFraction = 0.62, hudArrowFraction = 0.1;
 const point = (x: number, y: number, height = 0) => new THREE.Vector3((x - 500) * scale, height, (y - 340) * scale);
 
+function matchContacts(targets: World["targets"], contacts: VisionContact[]) {
+  const pairs = targets.flatMap((target) => contacts.map((contact) => ({ target, contact,
+    distance: Math.hypot(contact.x - target.x, contact.y - target.y) })));
+  pairs.sort((a, b) => a.distance - b.distance);
+  const matches = new Map<string, VisionContact>();
+  const used = new Set<string>();
+  for (const pair of pairs) {
+    if (pair.distance > 90 || matches.has(pair.target.id) || used.has(pair.contact.targetId)) continue;
+    matches.set(pair.target.id, pair.contact);
+    used.add(pair.contact.targetId);
+  }
+  return matches;
+}
+
 type StereoRigVisual = { group: THREE.Group; lenses: [THREE.Mesh, THREE.Mesh]; imu: THREE.Mesh; compass: THREE.Mesh };
 type OfficerVisual = { body: THREE.Mesh; head: THREE.Group; rig: StereoRigVisual; gaze: THREE.Line; gazePosition: THREE.BufferAttribute; gazeMaterial: THREE.LineBasicMaterial; gazePoint: THREE.Mesh };
 type FieldVisual = { group: THREE.Group; left: THREE.Mesh; right: THREE.Mesh; overlap: THREE.Line };
@@ -472,8 +486,10 @@ export default function SimulationScene({ world, options, contacts, sensors, awa
       const bounds = renderer.domElement.getBoundingClientRect(); pointer.set(fromCrosshair ? 0 : ((event.clientX - bounds.left) / bounds.width) * 2 - 1, fromCrosshair ? 0 : -((event.clientY - bounds.top) / bounds.height) * 2 + 1); raycaster.setFromCamera(pointer, camera);
       const officerOf = (object: THREE.Object3D | null): string | undefined => object ? object.userData.officerId ?? officerOf(object.parent) : undefined, targetOf = (object: THREE.Object3D | null): string | undefined => object ? object.userData.targetId ?? targetOf(object.parent) : undefined, hit = raycaster.intersectObjects([...people.values()], true)[0];
       if (!hit) return false;
-      const officerId = officerOf(hit.object), targetId = targetOf(hit.object); if (officerId) onSelect(officerId); else if (targetId) onToggleThreat(targetId);
-      return Boolean(officerId || targetId);
+      const officerId = officerOf(hit.object), targetId = targetOf(hit.object);
+      const trackId = targetId && world.current ? matchContacts(world.current.targets, contacts.current).get(targetId)?.targetId : undefined;
+      if (officerId) onSelect(officerId); else if (trackId) onToggleThreat(trackId);
+      return Boolean(officerId || trackId);
     };
     const select = (event: PointerEvent) => {
       renderer.domElement.focus();
@@ -518,7 +534,7 @@ export default function SimulationScene({ world, options, contacts, sensors, awa
           const tagging = !airborne && report && report.fixes > 0 && !report.located;
           for (let index = 0; index < visual.fixLines.length; index++) { const line = visual.fixLines[index], observer = tagging ? w.officers.find((officer) => officer.id === report.observers[index]) : undefined; line.line.visible = Boolean(observer); if (observer) { const from = point(observer.x, observer.y, eyeHeight), to = point(sensor.x, sensor.y, sensor.height * scale); line.position.setXYZ(0, from.x, from.y, from.z); line.position.setXYZ(1, to.x, to.y, to.z); line.position.needsUpdate = true; line.distance.setX(0, 0); line.distance.setX(1, from.distanceTo(to)); line.distance.needsUpdate = true; } }
         }
-        const live = new Map(contacts.current.map((item) => [item.targetId, item])), known = new Map(awareness.current.map((item) => [item.targetId, item]));
+        const live = matchContacts(w.targets, contacts.current), known = matchContacts(w.targets, awareness.current);
         for (const target of w.targets) {
           const mesh = people.get(target.id)!, contact = live.get(target.id), visual = contactVisuals.get(target.id)!, tracked = known.get(target.id), cleared = contact?.threat === "cleared" || tracked?.threat === "cleared", bodyMaterial = (mesh.children[0] as THREE.Mesh).material as THREE.MeshStandardMaterial; mesh.visible = settings.mode === "overview" || Boolean(contact); mesh.position.copy(point(target.x, target.y)); mesh.rotation.y = Math.PI / 2 - target.angle; animateHuman(mesh, target, w.time); bodyMaterial.color.copy(cleared ? clearedTintColor : mesh.userData.originalBodyColor as THREE.Color); bodyMaterial.opacity = contact?.coasting ? 0.42 : 1;
           const direction = directionArrows.get(target.id)!; direction.arrow.visible = false;

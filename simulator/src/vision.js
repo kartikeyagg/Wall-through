@@ -17,9 +17,11 @@ import {
   inFrame,
   observePoint,
   projectPoint,
+  rigToWorld,
   worldToRig,
 } from "./stereo.js";
 import { MotionTracker } from "./tracking.js";
+import { TrackAssociator } from "./association.js";
 
 export const UNITS_PER_METRE = 24;
 export const TARGET_HEIGHT_METRES = 1.75;
@@ -54,6 +56,27 @@ export function officerPose(officer, rig) {
   };
 }
 
+function estimatedPose(officer, rig, estimate) {
+  if (!estimate) return officerPose(officer, rig);
+  return {
+    position: { x: unitsToMetres(estimate.position.x), y: rig.mountHeight,
+      z: unitsToMetres(estimate.position.z) },
+    yaw: estimate.orientation.yaw,
+    pitch: estimate.orientation.pitch,
+    roll: estimate.orientation.roll,
+  };
+}
+
+function worldSigma(observation, estimate) {
+  if (!estimate) return metresToUnits(observation.sigma);
+  const visual = estimate.fix?.sigma ?? 0;
+  const gps = estimate.gps?.sigma;
+  const positionSigma = gps ? 1 / Math.sqrt(1 / visual ** 2 + 1 / gps ** 2) : visual;
+  const headingSigma = estimate.headingSigma ?? 0.012;
+  const range = metresToUnits(observation.depth);
+  return Math.hypot(metresToUnits(observation.sigma), positionSigma, range * headingSigma);
+}
+
 export function effectiveRange(rig, range) {
   const optics = metresToUnits(Math.min(
     rig.maxDepth,
@@ -75,8 +98,9 @@ function normalize(vector) {
   return length > 1e-6 ? { x: vector.x / length, z: vector.z / length } : { x: 0, z: 0 };
 }
 
-function cameraSkeleton(model, detection, officer, rig, walls, random) {
-  const pose = officerPose(officer, rig);
+function cameraSkeleton(model, detection, officer, rig, walls, random, estimate) {
+  const physicalPose = officerPose(officer, rig);
+  const reconstructionPose = estimatedPose(officer, rig, estimate);
   const byName = Object.fromEntries(model.joints.map((joint) => [joint.name, joint]));
   const torso = {
     x: (byName.rHip.x + byName.lHip.x + byName.rShoulder.x + byName.lShoulder.x) / 4,
@@ -88,11 +112,13 @@ function cameraSkeleton(model, detection, officer, rig, walls, random) {
   const sideOn = Math.abs(lateral.x * bearing.x + lateral.z * bearing.z) > 0.35;
   const joints = model.joints.map((joint) => {
     const point = { x: unitsToMetres(joint.x), y: unitsToMetres(joint.y), z: unitsToMetres(joint.z) };
-    // Each landmark remains a camera measurement, while the detection that
-    // rooted this model supplies the one shared triangulation displacement.
-    const rigPoint = worldToRig(point, pose);
+    // The model is rooted at an already localized detection. Recover its
+    // camera-relative geometry before simulating pixels, so localization
+    // error enters the published joint position only once.
+    const rigPoint = worldToRig(point, reconstructionPose);
+    const physicalPoint = rigToWorld(rigPoint, physicalPose);
     const projection = projectPoint(rigPoint, rig);
-    const measured = observePoint(point, pose, rig, {
+    const measured = observePoint(physicalPoint, physicalPose, rig, {
       height: TARGET_HEIGHT_METRES,
       width: 0.55,
     });
@@ -106,12 +132,12 @@ function cameraSkeleton(model, detection, officer, rig, walls, random) {
       v: measured.v + random() * keypointNoisePx,
     } : measured;
     localized.uRight = localized.uLeft - localized.disparity;
-    const reconstructed = backProject(localized, pose, rig);
+    const reconstructed = backProject(localized, reconstructionPose, rig);
     const physicalDisparity = depthToDisparity(projection.depth, rig);
     const framed = inFrame(localized, rig);
     const jointBearing = vector(torso, joint);
     const farSide = sideOn && jointBearing.x * bearing.x + jointBearing.z * bearing.z < -0.015;
-    const behindWall = occluded(officer, { x: metresToUnits(point.x), y: metresToUnits(point.z) }, walls);
+    const behindWall = occluded(officer, { x: metresToUnits(physicalPoint.x), y: metresToUnits(physicalPoint.z) }, walls);
     const visible = framed && measured.disparity >= rig.minDisparityPx && physicalDisparity >= rig.minDisparityPx
       && !farSide && !behindWall;
     const apparentHeight = TARGET_HEIGHT_METRES * rig.focalPx / localized.depth;
@@ -190,6 +216,7 @@ function restingReport(sensor) {
  */
 export function fixSensor(world, sensor, rig, options = {}, timestamp = world.time * 1000) {
   const range = effectiveRange(rig, options.range);
+  const estimates = new Map((options.localizations ?? []).map((item) => [item.officerId, item]));
   return world.officers.flatMap((officer) => {
     if (occluded(officer, sensor, world.walls)) return [];
     if (Math.hypot(sensor.x - officer.x, sensor.y - officer.y) > range) return [];
@@ -210,12 +237,13 @@ export function fixSensor(world, sensor, rig, options = {}, timestamp = world.ti
       },
     );
     if (!observation?.usable) return [];
+    const reconstructed = backProject(observation, estimatedPose(officer, rig, estimates.get(officer.id)), rig);
     return [{
       position: {
-        x: metresToUnits(observation.position.x),
-        y: metresToUnits(observation.position.z),
+        x: metresToUnits(reconstructed.x),
+        y: metresToUnits(reconstructed.z),
       },
-      sigma: metresToUnits(observation.sigma),
+      sigma: worldSigma(observation, estimates.get(officer.id)),
       officerId: officer.id,
       timestamp,
     }];
@@ -224,7 +252,12 @@ export function fixSensor(world, sensor, rig, options = {}, timestamp = world.ti
 
 function detectWith(world, options, timestamp, rig, random, overlaysFor = () => [], feeds) {
   const range = effectiveRange(rig, options.range);
-  const realSubjects = world.targets.map((target) => ({ id: target.id, x: target.x, y: target.y }));
+  const estimates = new Map((options.localizations ?? []).map((item) => [item.officerId, item]));
+  const realSubjects = world.targets.map((target) => {
+    const subject = { x: target.x, y: target.y };
+    Object.defineProperty(subject, "truthId", { value: target.id });
+    return subject;
+  });
   return world.officers.flatMap((officer) => {
     const feed = composeFeed(officer.id, realSubjects, overlaysFor(officer.id, timestamp), timestamp);
     if (feeds) feeds.push(feed);
@@ -246,17 +279,18 @@ function detectWith(world, options, timestamp, rig, random, overlaysFor = () => 
         },
       );
       if (!observation?.usable) return [];
-      return [{
+      const estimate = estimates.get(officer.id);
+      const reconstructed = backProject(observation, estimatedPose(officer, rig, estimate), rig);
+      const detection = {
         timestamp,
         officerId: officer.id,
-        trackId: target.id,
         position: {
-          x: metresToUnits(observation.position.x),
-          y: observation.position.y,
-          z: metresToUnits(observation.position.z),
+          x: metresToUnits(reconstructed.x),
+          y: reconstructed.y,
+          z: metresToUnits(reconstructed.z),
         },
         confidence: observation.confidence,
-        sigma: metresToUnits(observation.sigma),
+        sigma: worldSigma(observation, estimate),
         disparity: observation.disparity,
         depth: observation.depth,
         pixels: {
@@ -268,7 +302,9 @@ function detectWith(world, options, timestamp, rig, random, overlaysFor = () => 
         },
         outline: { type: "capsule", height: TARGET_HEIGHT_METRES, radius: 0.28 },
         sensor: { kind: "stereo-camera", id: `${officer.id}-stereo` },
-      }];
+      };
+      Object.defineProperty(detection, "truthId", { value: target.truthId });
+      return [detection];
     });
   });
 }
@@ -276,17 +312,18 @@ function detectWith(world, options, timestamp, rig, random, overlaysFor = () => 
 export function detect(world, options = {}, timestamp = world.time * 1000) {
   const rig = rigFor(options);
   const random = options.noise === false ? undefined : createGaussian(options.seed ?? 1);
-  return detectWith(world, options, timestamp, rig, random);
+  return new TrackAssociator().assign(detectWith(world, options, timestamp, rig, random), timestamp);
 }
 
 export function createStereoVisionProvider(world, options = {}) {
   const rig = rigFor(options);
   const random = options.noise === false ? undefined : createGaussian(options.seed ?? 1);
+  const associator = new TrackAssociator();
   return {
     source: "head-stereo-camera",
     rig,
     read(timestamp = world.time * 1000) {
-      return detectWith(world, options, timestamp, rig, random);
+      return associator.assign(detectWith(world, options, timestamp, rig, random), timestamp);
     },
   };
 }
@@ -297,6 +334,7 @@ export class StereoVisionPipeline {
     this.rig = rigFor(this.options);
     this.markerRig = markerRig(this.rig);
     this.tracker = new MotionTracker(options.tracker);
+    this.associator = new TrackAssociator();
     this.poser = new SkeletonPoser({ height: TARGET_HEIGHT_UNITS, ...options.skeleton });
     this.overlays = new OverlayBus(options.overlay);
     this.random = options.noise === false ? undefined : createGaussian(options.seed ?? 1);
@@ -340,7 +378,7 @@ export class StereoVisionPipeline {
     this.captureTimestamps = [];
   }
 
-  update(world, timestamp = world.time * 1000) {
+  update(world, timestamp = world.time * 1000, localizations = []) {
     // Exposures are scheduled on a running deadline rather than measured from
     // the last one: at 30 fps on a 60 Hz loop the two grids line up exactly, and
     // timing each interval from the previous capture lets float error push every
@@ -355,15 +393,15 @@ export class StereoVisionPipeline {
     let bypassed = this.bypassed;
     const measurements = [];
     if (captured) {
-      detections = detectWith(
+      detections = this.associator.assign(detectWith(
         world,
-        this.options,
+        { ...this.options, localizations },
         timestamp,
         this.rig,
         this.random,
         (officerId, frameTimestamp) => this.overlaysFor(officerId, frameTimestamp),
         feeds,
-      );
+      ), timestamp);
       measurements.push(...detections.map((detection) => ({
         trackId: detection.trackId,
         position: detection.position,
@@ -378,7 +416,7 @@ export class StereoVisionPipeline {
     // Radar association runs against last frame's tracks, the prior every
     // association step is entitled to, so both modalities correct the same
     // filter in one update.
-    const radar = this.radarFrame(world, timestamp, this.tracker.snapshot());
+    const radar = this.radarFrame(world, timestamp, this.tracker.snapshot(), localizations);
     measurements.push(...radar.measurements);
     const tracks = this.tracker.update(measurements, timestamp);
     this.holdExposure(tracks, captured, interval);
@@ -407,6 +445,7 @@ export class StereoVisionPipeline {
         const officer = officersById.get(detections[index].officerId);
         if (officer) detections[index].skeleton = cameraSkeleton(
           models[index], detections[index], officer, this.rig, world.walls, this.random,
+          localizations.find((item) => item.officerId === officer.id),
         );
       }
     }
@@ -485,7 +524,7 @@ export class StereoVisionPipeline {
    * puck drags its radar tracks off with it. Until a puck is both settled and
    * located, it contributes nothing.
    */
-  radarFrame(world, timestamp, visionTracks) {
+  radarFrame(world, timestamp, visionTracks, localizations = []) {
     const deployed = world.sensors ?? [];
     const live = new Set(deployed.map((sensor) => sensor.id));
     for (const sensorId of [...this.radarTrackers.keys()]) {
@@ -515,6 +554,7 @@ export class StereoVisionPipeline {
       const fixes = due
         ? fixSensor(world, sensor, this.markerRig, {
           range: this.options.range,
+          localizations,
           ...(this.markerRandom ? { random: this.markerRandom } : {}),
         }, timestamp)
         : [];
@@ -598,6 +638,7 @@ export class StereoVisionPipeline {
 
   reset() {
     this.tracker.reset();
+    this.associator.reset();
     this.poser.reset();
     this.overlays.reset();
     this.localizer.reset();

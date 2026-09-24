@@ -35,9 +35,12 @@ export class TrialMetrics {
     this.wrongClearances = 0;
     this.unclearedBystanders = 0;
     this.bystanders = 0;
+    this.truthByTrack = new Map();
   }
 
   observe(world, localizations, frame, clearanceStates = new Map()) {
+    for (const detection of frame.detections ?? []) if (detection.truthId)
+      this.truthByTrack.set(detection.trackId, detection.truthId);
     const truth = world.targets.map((target) => ({ x: target.x, y: target.y }));
     const tracks = frame.tracks.map((track) => ({ x: track.position.x, y: track.position.z }));
     this.gospaSum += gospa(tracks, truth);
@@ -49,7 +52,7 @@ export class TrialMetrics {
       this.localCount += 1;
     }
     for (const skeleton of frame.skeletons) {
-      const target = world.targets.find((item) => item.id === skeleton.trackId);
+      const target = world.targets.find((item) => item.id === this.truthByTrack.get(skeleton.trackId));
       const joints = skeleton.skeleton.joints.filter((item) => item.visible && ["rAnkle", "lAnkle"].includes(item.name));
       if (!target || !joints.length) continue;
       const centre = { x: joints.reduce((sum, item) => sum + item.x, 0) / joints.length,
@@ -64,7 +67,8 @@ export class TrialMetrics {
     const bystanders = world.targets.filter((target) => !target.hostile).length;
     this.bystanders = bystanders;
     for (const target of world.targets) {
-      const cleared = clearanceStates.get(target.id) === "cleared";
+      const cleared = [...this.truthByTrack].some(([trackId, truthId]) =>
+        truthId === target.id && clearanceStates.get(trackId) === "cleared");
       if (cleared && target.hostile) this.wrongClearances += 1;
       if (!cleared && !target.hostile) this.unclearedBystanders += 1;
     }

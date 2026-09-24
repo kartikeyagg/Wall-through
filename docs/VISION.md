@@ -88,6 +88,12 @@ dimmed and marked `Predicted`, until it goes stale.
 that converts to the simulation's ground units (`UNITS_PER_METRE = 24`), which
 keeps the optics testable against real-world numbers.
 
+### Anonymous association and estimated self-pose
+
+The simulated camera reads body geometry to produce image measurements, then `TrackAssociator` groups them by spatial gate and assigns `A…` track IDs. A crossing can retain IDs when the motion prediction separates the two paths; a missed view or ambiguous return can still switch an ID. The simulator's `T…` ID is stored non-enumerably on detections for lab scoring only and does not enter the tracker, overlay, network observation, or operator display.
+
+The physical officer pose generates the image measurement. Back projection uses that officer's published `SelfLocalization` estimate, which the live app passes to the pipeline each tick. The same estimate places reconstructed skeleton joints and visible puck-marker fixes. Position uncertainty combines stereo depth, self-pose position error, and the range multiplied by heading uncertainty. Turning an estimate away from true heading therefore shifts a distant target more than a nearby one.
+
 Matcher noise is deterministic: pass a `seed` (or `noise: false` for exact
 triangulation) and a run is byte-for-byte reproducible, which is what the tests
 rely on.
