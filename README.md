@@ -51,6 +51,8 @@ npm run build
 
 For browser checks, install Chromium once with `npx playwright install chromium`, then run `npm run test:browser`.
 
+For repeatable accuracy and performance measurements, run `npm run trials` and `npm run bench` from `simulator/`. The commands, metric definitions, parameter provenance, and current indoor/outdoor baseline are in [the simulator evaluation baseline](docs/SIMULATOR-BASELINE.md).
+
 This is a development demonstration; it does not implement real hardware drivers, real radar hardware or RF modelling, calibration or rectification, trained computer-vision or pose-estimation models, or physical see-through-wall sensing.
 
 ## Going real

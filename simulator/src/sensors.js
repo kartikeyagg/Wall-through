@@ -10,6 +10,7 @@
  */
 
 import { visibleLandmarks } from "./simulation.js";
+import { parameterValues } from "./params.js";
 
 const wrapAngle = (angle) => Math.atan2(Math.sin(angle), Math.cos(angle));
 const blendAngle = (primary, secondary, secondaryWeight) =>
@@ -78,19 +79,20 @@ export function createSimulatedPoseProvider(world) {
  * and demos remain repeatable.
  */
 export class SelfLocalization {
-  constructor({
-    stereoPositionError = 0.7,
-    compassError = 0.012,
-    imuWeight = 0.14,
-    stereoGoodPositionError = 0.12,
-    stereoPoorPositionError = 1.4,
-    landmarkRange = 420,
-    landmarkFov = Math.PI * 0.65,
-    landmarkQualityScale = 0.4,
-    lostFixGrowth = 0.35,
-    outdoorPositionError = 120,
-    gpsPositionError = 48,
-  } = {}) {
+  constructor(options = {}) {
+    const {
+    stereoPositionError,
+    compassError,
+    imuWeight,
+    stereoGoodPositionError,
+    stereoPoorPositionError,
+    landmarkRange,
+    landmarkFov,
+    landmarkQualityScale,
+    lostFixGrowth,
+    outdoorPositionError,
+    gpsPositionError,
+    } = { ...parameterValues("localization"), ...options };
     this.stereoPositionError = stereoPositionError;
     this.compassError = compassError;
     this.imuWeight = imuWeight;
