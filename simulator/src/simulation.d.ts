@@ -80,6 +80,7 @@ export interface DeployedSensor extends Agent {
   settledAt: number | null;
 }
 export interface World {
+  environment?: "indoor" | "outdoor";
   officers: Agent[];
   targets: Target[];
   walls: Wall[];
@@ -115,7 +116,7 @@ export interface StepOptions {
   moveRight?: number;
   turn?: number;
 }
-export function createWorld(count?: number): World;
+export function createWorld(count?: number, options?: { environment?: "indoor" | "outdoor" }): World;
 export function stepWorld(
   world: World,
   dt: number,

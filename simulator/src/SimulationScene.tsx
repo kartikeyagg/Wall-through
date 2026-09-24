@@ -406,7 +406,7 @@ export default function SimulationScene({ world, options, contacts, sensors, awa
     const grid = new THREE.GridHelper(20, 25, "#293a43", "#1b2a32"); grid.position.y = 0.005; scene.add(grid);
     const people = new Map<string, THREE.Group>(), officerVisuals = new Map<string, OfficerVisual>(), gazeGroup = new THREE.Group(), fields = new Map<string, FieldVisual>(), contactVisuals = new Map<string, ContactVisual>(), directSkeletonVisuals = new Map<string, SkeletonVisual>(), overlaySkeletonVisuals = new Map<string, SkeletonVisual>(), freeOverlaySkeletonVisuals: SkeletonVisual[] = [], linkVisuals = new Map<string, LinkVisual>(), directionArrows = new Map<string, DirectionArrowVisual>(), sensorVisuals = new Map<string, SensorVisual>();
     const linkGroup = new THREE.Group(), fovGroup = new THREE.Group(), wallGroup = new THREE.Group(), landmarkGroup = new THREE.Group(), contactGroup = new THREE.Group(), skeletonGroup = new THREE.Group(), sensorGroup = new THREE.Group(); scene.add(linkGroup, fovGroup, wallGroup, landmarkGroup, contactGroup, skeletonGroup, gazeGroup, sensorGroup);
-    const landmarkTextures: THREE.Texture[] = []; let landmarksBuilt = false;
+    const landmarkTextures: THREE.Texture[] = [];
     const radarGeometry = new THREE.CircleGeometry(1, 48), radarMaterial = new THREE.MeshBasicMaterial({ color: "#e879f9", transparent: true, opacity: 0.07, side: THREE.DoubleSide, depthWrite: false });
     const emptyDeployedSensors: World["sensors"] = [], emptySensorReports: SensorReport[] = [];
     // The HUD rides on the camera, so it must be in the scene graph for its children to render.
@@ -418,11 +418,11 @@ export default function SimulationScene({ world, options, contacts, sensors, awa
     const disposeSensorVisual = (visual: SensorVisual) => { sensorGroup.remove(visual.group, visual.marker, visual.coverage); disposeObject(visual.group); disposeObject(visual.marker); };
     const buildLandmarks = (landmarks: readonly Landmark[]) => {
       for (const landmark of landmarks) { const visual = makeLandmarkVisual(landmark); landmarkGroup.add(visual.object); if (visual.texture) landmarkTextures.push(visual.texture); }
-      landmarksBuilt = true;
     };
     const rebuild = (w: World) => {
       for (const person of people.values()) { scene.remove(person); disposeObject(person); }
-      clearGroup(fovGroup); clearGroup(wallGroup); clearGroup(contactGroup); clearGroup(linkGroup); clearGroup(skeletonGroup); clearGroup(gazeGroup); clearGroup(hudGroup); people.clear(); officerVisuals.clear(); fields.clear(); contactVisuals.clear(); directSkeletonVisuals.clear(); overlaySkeletonVisuals.clear(); freeOverlaySkeletonVisuals.length = 0; linkVisuals.clear(); directionArrows.clear();
+      clearGroup(fovGroup); clearGroup(wallGroup); clearGroup(landmarkGroup); clearGroup(contactGroup); clearGroup(linkGroup); clearGroup(skeletonGroup); clearGroup(gazeGroup); clearGroup(hudGroup); for (const texture of landmarkTextures) texture.dispose(); landmarkTextures.length = 0; people.clear(); officerVisuals.clear(); fields.clear(); contactVisuals.clear(); directSkeletonVisuals.clear(); overlaySkeletonVisuals.clear(); freeOverlaySkeletonVisuals.length = 0; linkVisuals.clear(); directionArrows.clear();
+      buildLandmarks(w.landmarks ?? []);
       for (const wall of w.walls) {
         const width = wall.w * scale, depth = wall.h * scale, material = new THREE.MeshStandardMaterial({ color: "#b4c3c3", map: wallSurface.texture, bumpMap: wallSurface.bumpTexture, bumpScale: 0.035, roughness: 0.78, metalness: 0.04 });
         const mesh = new THREE.Mesh(new THREE.BoxGeometry(width, 2.2, depth), material); mesh.position.copy(point(wall.x + wall.w / 2, wall.y + wall.h / 2, 1.1));
@@ -494,8 +494,6 @@ export default function SimulationScene({ world, options, contacts, sensors, awa
       crosshair.visible = pointerLocked && settings.mode === "glasses" && settings.mouseLook;
       if (w) {
         if (w !== lastWorld || people.size !== w.officers.length + w.targets.length) rebuild(w);
-        const landmarks = (w as World & { landmarks?: Landmark[] }).landmarks;
-        if (!landmarksBuilt && landmarks?.length) buildLandmarks(landmarks);
         const selected = w.officers.find((item) => item.id === settings.selected) ?? w.officers[0]; pulse += 0.045;
         for (const officer of w.officers) {
           const mesh = people.get(officer.id)!, visual = officerVisuals.get(officer.id)!, isSelected = officer.id === selected.id, tone = isSelected ? "#bcf574" : "#76baff"; mesh.position.copy(point(officer.x, officer.y)); mesh.rotation.y = Math.PI / 2 - officer.angle; (visual.body.material as THREE.MeshStandardMaterial).color.set(tone);

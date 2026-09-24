@@ -51,6 +51,29 @@ test("3D controls retain movement, scanning, reset and team sizing", async ({ pa
   await expect(page.locator(".map-state")).toContainText("PAUSED");
 });
 
+test("outdoor GPS is off by default, improves the displayed fix, and resets indoors", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator(".three-canvas canvas")).toBeVisible();
+  const gps = page.getByRole("checkbox", { name: "GPS position fix" });
+  const uwb = page.getByRole("checkbox", { name: "UWB ranging (future)" });
+  await expect(gps).toBeDisabled();
+  await expect(gps).not.toBeChecked();
+  await expect(uwb).toBeDisabled();
+  await expect(uwb).not.toBeChecked();
+  await page.getByRole("combobox", { name: "Environment" }).selectOption("outdoor");
+  await expect(gps).toBeEnabled();
+  await expect(gps).not.toBeChecked();
+  await expect(page.locator(".scenario")).toContainText("Open training ground");
+  const source = page.locator(".panel", { hasText: "Self localization" }).locator(".tiny");
+  await expect(source).not.toContainText("GPS");
+  await gps.check();
+  await expect(source).toContainText("GPS");
+  await page.getByRole("combobox", { name: "Environment" }).selectOption("indoor");
+  await expect(gps).toBeDisabled();
+  await expect(gps).not.toBeChecked();
+  await expect(source).not.toContainText("GPS");
+});
+
 test("stereo rig telemetry reacts to the baseline and range controls", async ({ page }) => {
   await pausedScene(page);
   // Self localization uses the same readout layout, so scope to this panel.

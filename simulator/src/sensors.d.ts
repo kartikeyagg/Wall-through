@@ -8,8 +8,9 @@ export interface Pose {
 }
 
 export interface LocalizationEstimate extends Pose {
-  sources: { stereo: true; compass: true; imu: boolean };
+  sources: { stereo: true; compass: true; imu: boolean; gps: boolean };
   fix: { quality: number; landmarks: number; spread: number; sigma: number };
+  gps?: { sigma: number };
   imu?: { velocity: { x: number; z: number }; yawRate: number };
 }
 
@@ -26,7 +27,9 @@ export class SelfLocalization {
     landmarkFov?: number;
     landmarkQualityScale?: number;
     lostFixGrowth?: number;
+    outdoorPositionError?: number;
+    gpsPositionError?: number;
   });
-  update(world: World, timestamp?: number, options?: { imuEnabled?: boolean }): LocalizationEstimate[];
+  update(world: World, timestamp?: number, options?: { imuEnabled?: boolean; gpsEnabled?: boolean }): LocalizationEstimate[];
   reset(): void;
 }

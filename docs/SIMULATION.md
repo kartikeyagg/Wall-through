@@ -2,7 +2,7 @@
 
 ## What it demonstrates
 
-Wall Through is a browser-based 3D scene with 5–10 police officers, three moving simulated terrorists, opaque 3D walls, and a ground plane. Walls are static colliders; officers and targets are kinematic capsule bodies. Fixed simulation substeps prevent tunnelling and permit sliding along a wall.
+Wall Through is a browser-based 3D scene with 5–10 police officers, three moving simulated people, and a ground plane. The default divided hall has opaque 3D walls; the outdoor training ground has none. Walls are static colliders; officers and targets are kinematic capsule bodies. Fixed simulation substeps prevent tunnelling and permit sliding along a wall.
 
 The world overview is an inspectable third-person 3D scene. Officer glasses is a first-person 3D camera placed exactly where the selected officer’s stereo rig is: at eye height (the rig's 1.7 m `mountHeight`), looking level along the heading, with the rig's horizontal field of view. What you see in glasses view is the camera's view. In glasses view, only direct contacts, live teammate-shared outlines, and the translucent skeleton overlays teammates publish are rendered.
 
@@ -28,6 +28,12 @@ panel. One stretch of wall is deliberately left bare.
 Every police head rig also has a compass and a compact IMU. `SelfLocalization` in `src/sensors.js` derives a primary self-pose from known static stereo map features (walls and corners) and compass heading. It then applies the IMU's integrated velocity and yaw as a low-weight correction. This order is deliberate: the simulation makes the IMU noticeably noisier than a real unit, so it may smooth a pose but cannot replace stereo and compass.
 
 The **Self localization** panel exposes local X/Z, compass heading, and simulated position error for the selected officer. **IMU integration** is enabled by default; turn it off to use the stereo-map and compass estimate alone. The violet module on the head rig is lit when that integration is enabled; the gold disc is the compass.
+
+### Outdoor GPS and future UWB
+
+Choose **Open training ground (outdoor)** under **Environment** to restart in an open-sky scene with no walls or mapped visual landmarks. The visual position estimate is deliberately weak there. **GPS position fix** is off by default and can be enabled only in this outdoor scene. It combines a deterministic simulated 2 m position measurement with the visual estimate, improving the published officer pose and minimap location; it does not supply heading or detect people. Returning indoors switches GPS off. This is a GPS error model, not a live device feed or a geographic coordinate service.
+
+**UWB ranging (future)** remains visible as a disabled, unchecked additional-feature placeholder. No UWB readings enter localization, puck positioning, or tracking. The indoor scene still uses its stereo/compass/optional IMU setup.
 
 ### Lightweight people and environment
 
