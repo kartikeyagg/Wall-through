@@ -60,3 +60,5 @@ This is a development demonstration; it does not implement real hardware drivers
 ## Going real
 
 [The real-world plan](docs/REAL-WORLD-PLAN.md) sets out what a hardware build needs: the officer kit, the thrown radar puck, the team network and the software that replaces each simulator module. It also lists every place the simulator is currently more optimistic than reality, and how to make it realistic while keeping it lag-free on a modest laptop.
+
+For an Intel RealSense D415, use the [D415 capture guide](hardware/realsense/README.md). It creates a native replayable recording and separate raw RGB, depth and IR camera feeds, then saves derived point clouds without discarding the originals. The D415 has no IMU, so a world-locked 3D map needs a calibrated external IMU and VIO/SLAM pose stream.
