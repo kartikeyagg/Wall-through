@@ -122,7 +122,7 @@ function createLandmarks(walls) {
   return landmarks;
 }
 
-export function createWorld(count = 7) {
+export function createWorld(count = 7, { environment = "indoor" } = {}) {
   const officerCount = clamp(
     Number.isFinite(Number(count)) ? Math.round(Number(count)) : 7,
     5,
@@ -147,6 +147,7 @@ export function createWorld(count = 7) {
     { x: 80, y: 605, w: 200, h: 18 },
   ];
   return {
+    environment,
     time: 0,
     officers: positions.slice(0, officerCount).map(([x, y, angle], i) => ({
       id: `P${i + 1}`,
@@ -168,8 +169,8 @@ export function createWorld(count = 7) {
         motion: targetMotion(seedForId("T3"), 340, 470) },
     ],
     sensors: [],
-    walls,
-    landmarks: createLandmarks(walls),
+    walls: environment === "outdoor" ? [] : walls,
+    landmarks: environment === "outdoor" ? [] : createLandmarks(walls),
   };
 }
 

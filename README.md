@@ -14,11 +14,15 @@ npm run dev
 
 Open the URL printed by the development server. Physical cameras, RealSense, LiDAR, ROS, and a separate simulation service are not required for this phase.
 
+In **Simulation settings**, switch **Environment** to **Open training ground (outdoor)** to try an open-sky scene without walls or mapped landmarks. **GPS position fix** starts off; enable it outdoors to combine a simulated satellite position measurement with the officer's visual estimate. The indoor hall disables GPS. **UWB ranging (future)** is an inactive, off-by-default additional feature. See [the simulation guide](docs/SIMULATION.md#outdoor-gps-and-future-uwb).
+
 ## Try it
 
 Select an officer in the 3D world overview, then choose **Officer glasses** for a first-person view. That view comes from the officer's stereo camera, the only sensor, which sits on their eyes. In the overview, each officer's eyes and gaze ray show where they are looking, and the dot marks what they are looking at ([details](docs/SIMULATION.md#where-each-officer-is-looking)). Directly observed targets appear normally; targets observed by teammates appear as shared 3D outlines through walls. Camera range limits the officer making the sensor measurement, not the receiving officer’s shared outline.
 
 Detected targets are marked with a velocity arrow, a fading movement trail, and an uncertainty ring that swells with range — depth error grows with the square of distance, so a distant target is genuinely less precisely located. Drag **Stereo baseline** to watch triangulation tighten or fail.
+
+Live tracks use anonymous `A…` IDs assigned from sensor positions; the detector does not publish the simulated person's `T…` identity. Camera measurements and published skeletons are placed into the shared world through each officer's estimated self-pose, so localization error can shift a teammate's overlay.
 
 In **Officer glasses**, arrows around the centre of the view point toward every live target, even ones behind the officer. Up means ahead and down means behind. Yellow arrows are the officer's own detections; lime arrows come from teammates. Like skeletons, the arrows are drawn over walls ([details](docs/SIMULATION.md#direction-arrows-to-every-known-target)).
 
@@ -49,8 +53,12 @@ npm run build
 
 For browser checks, install Chromium once with `npx playwright install chromium`, then run `npm run test:browser`.
 
+For repeatable accuracy and performance measurements, run `npm run trials` and `npm run bench` from `simulator/`. The commands, metric definitions, parameter provenance, and current indoor/outdoor baseline are in [the simulator evaluation baseline](docs/SIMULATOR-BASELINE.md).
+
 This is a development demonstration; it does not implement real hardware drivers, real radar hardware or RF modelling, calibration or rectification, trained computer-vision or pose-estimation models, or physical see-through-wall sensing.
 
 ## Going real
 
 [The real-world plan](docs/REAL-WORLD-PLAN.md) sets out what a hardware build needs: the officer kit, the thrown radar puck, the team network and the software that replaces each simulator module. It also lists every place the simulator is currently more optimistic than reality, and how to make it realistic while keeping it lag-free on a modest laptop.
+
+For an Intel RealSense D415, use the [D415 capture guide](hardware/realsense/README.md). It creates a native replayable recording and separate raw RGB, depth and IR camera feeds, then saves derived point clouds without discarding the originals. The D415 has no IMU, so a world-locked 3D map needs a calibrated external IMU and VIO/SLAM pose stream.

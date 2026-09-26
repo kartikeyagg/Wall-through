@@ -8,6 +8,8 @@
   "scripts": {
     "dev": "vinext dev",
     "test": "node --test tests/*.test.js",
+    "trials": "node scripts/run-trials.mjs",
+    "bench": "node scripts/bench.mjs",
     "test:browser": "playwright test",
     "typecheck": "tsc --noEmit",
     "build": "vinext build",

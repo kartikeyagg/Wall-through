@@ -643,6 +643,11 @@ h2 {
   color: var(--muted);
   font: 10px monospace;
 }
+.configuration select {
+  display: block;
+  width: 100%;
+  margin-top: 10px;
+}
 .configuration input[type="range"] {
   display: block;
   width: 100%;

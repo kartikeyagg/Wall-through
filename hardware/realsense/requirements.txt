@@ -1,0 +1,4 @@
+# Tested with Python 3.9 on Ubuntu 22.04.
+pyrealsense2==2.56.5.9235
+numpy==2.0.2
+opencv-python-headless==5.0.0.93

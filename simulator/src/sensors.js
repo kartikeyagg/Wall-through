@@ -10,6 +10,7 @@
  */
 
 import { visibleLandmarks } from "./simulation.js";
+import { parameterValues } from "./params.js";
 
 const wrapAngle = (angle) => Math.atan2(Math.sin(angle), Math.cos(angle));
 const blendAngle = (primary, secondary, secondaryWeight) =>
@@ -78,17 +79,20 @@ export function createSimulatedPoseProvider(world) {
  * and demos remain repeatable.
  */
 export class SelfLocalization {
-  constructor({
-    stereoPositionError = 0.7,
-    compassError = 0.012,
-    imuWeight = 0.14,
-    stereoGoodPositionError = 0.12,
-    stereoPoorPositionError = 1.4,
-    landmarkRange = 420,
-    landmarkFov = Math.PI * 0.65,
-    landmarkQualityScale = 0.4,
-    lostFixGrowth = 0.35,
-  } = {}) {
+  constructor(options = {}) {
+    const {
+    stereoPositionError,
+    compassError,
+    imuWeight,
+    stereoGoodPositionError,
+    stereoPoorPositionError,
+    landmarkRange,
+    landmarkFov,
+    landmarkQualityScale,
+    lostFixGrowth,
+    outdoorPositionError,
+    gpsPositionError,
+    } = { ...parameterValues("localization"), ...options };
     this.stereoPositionError = stereoPositionError;
     this.compassError = compassError;
     this.imuWeight = imuWeight;
@@ -98,16 +102,22 @@ export class SelfLocalization {
     this.landmarkFov = landmarkFov;
     this.landmarkQualityScale = landmarkQualityScale;
     this.lostFixGrowth = lostFixGrowth;
+    this.outdoorPositionError = outdoorPositionError;
+    this.gpsPositionError = gpsPositionError;
     this.states = new Map();
   }
 
-  update(world, timestamp = world.time * 1000, { imuEnabled = true } = {}) {
+  update(world, timestamp = world.time * 1000, { imuEnabled = true, gpsEnabled = false } = {}) {
     return world.officers.map((officer, index) => {
       const phase = timestamp / 1000 * 1.7 + index * 2.31;
       const previous = this.states.get(officer.id);
       const hasLandmarkMap = Array.isArray(world.landmarks) && world.landmarks.length > 0;
       let stereo, fix, lostFor = 0, lossDirection = null;
-      if (!hasLandmarkMap) {
+      if (world.environment === "outdoor") {
+        // In an open area there is no fixed stereo map to anchor position.
+        stereo = stereoPosition(officer, phase, this.outdoorPositionError);
+        fix = { quality: 0, landmarks: 0, spread: 0, sigma: this.outdoorPositionError };
+      } else if (!hasLandmarkMap) {
         // Preserve legacy worlds exactly until they opt into visual landmarks.
         stereo = stereoPosition(officer, phase, this.stereoPositionError);
         fix = { quality: 0, landmarks: 0, spread: 0, sigma: this.stereoPositionError };
@@ -159,8 +169,19 @@ export class SelfLocalization {
           fix = { quality: 0, landmarks: 0, spread: 0, sigma };
         }
       }
+      const gpsActive = gpsEnabled && world.environment === "outdoor";
+      const gps = gpsActive ? stereoPosition(officer, phase * 0.37 + 1.3, this.gpsPositionError) : null;
+      // Combine independent simulated position fixes by their stated variance.
+      // GPS supplies no heading and has no effect in the indoor hall.
+      const visualWeight = 1 / (fix.sigma * fix.sigma);
+      const gpsWeight = gps ? 1 / (this.gpsPositionError * this.gpsPositionError) : 0;
+      const primary = gps ? {
+        x: (stereo.x * visualWeight + gps.x * gpsWeight) / (visualWeight + gpsWeight),
+        y: 1.7,
+        z: (stereo.z * visualWeight + gps.z * gpsWeight) / (visualWeight + gpsWeight),
+      } : stereo;
       const compassYaw = wrapAngle(officer.angle + Math.sin(phase * 0.61) * this.compassError);
-      let position = stereo, yaw = compassYaw, imu = null;
+      let position = primary, yaw = compassYaw, imu = null;
       if (imuEnabled && previous && timestamp > previous.timestamp) {
         const dt = (timestamp - previous.timestamp) / 1000;
         const drift = 1 + 0.035 * Math.sin(phase * 1.9);
@@ -179,9 +200,9 @@ export class SelfLocalization {
         const predictedYaw = wrapAngle(previous.yaw + yawRate * dt);
         // Correct from stereo + compass first, then blend in the integrated IMU.
         position = {
-          x: stereo.x * (1 - this.imuWeight) + predicted.x * this.imuWeight,
+          x: primary.x * (1 - this.imuWeight) + predicted.x * this.imuWeight,
           y: 1.7,
-          z: stereo.z * (1 - this.imuWeight) + predicted.z * this.imuWeight,
+          z: primary.z * (1 - this.imuWeight) + predicted.z * this.imuWeight,
         };
         yaw = blendAngle(compassYaw, predictedYaw, this.imuWeight);
       }
@@ -190,8 +211,10 @@ export class SelfLocalization {
         timestamp,
         position,
         orientation: { yaw, pitch: 0, roll: 0 },
-        sources: { stereo: true, compass: true, imu: imuEnabled },
+        headingSigma: this.compassError,
+        sources: { stereo: true, compass: true, imu: imuEnabled, gps: gpsActive },
         fix,
+        ...(gps ? { gps: { sigma: this.gpsPositionError } } : {}),
         ...(imu ? { imu } : {}),
       };
       this.states.set(officer.id, {
