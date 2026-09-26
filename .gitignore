@@ -35,6 +35,9 @@ CMakeLists.txt.user
 srv/_*.py
 *.pcd
 *.pyc
+.venv/
+hardware/realsense/.venv/
+data/realsense/
 qtcreator-*
 *.user
 

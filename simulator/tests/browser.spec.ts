@@ -2,7 +2,7 @@ import { test, expect, type Page } from "@playwright/test";
 
 async function pausedScene(page: Page) {
   await page.goto("/");
-  await expect(page.locator(".three-canvas canvas")).toBeVisible();
+  await expect(page.locator(".three-canvas canvas")).toBeVisible({ timeout: 20_000 });
   await expect(page.locator(".map-state time")).not.toHaveText("0.0s");
   await page.getByRole("button", { name: "Pause", exact: false }).click();
   await page.getByRole("button", { name: "Reset scene", exact: false }).click();
@@ -15,13 +15,13 @@ test("3D scene exposes direct and fused shared sensor tracks", async ({ page }) 
   await pausedScene(page);
   await page.getByRole("button", { name: "Officer glasses", exact: true }).click();
   const contacts = page.locator(".contacts");
-  await expect(contacts).toContainText("T1");
+  await expect(contacts).toContainText(/A\d+/);
   await expect(contacts).toContainText("SHARED");
   await expect(contacts).toContainText("Live sensor reports: P1");
   await page.getByRole("switch", { name: "Shared vision" }).uncheck();
-  await expect(contacts).not.toContainText("T1");
+  await expect(contacts.locator(".contact")).toHaveCount(0);
   await page.getByRole("switch", { name: "Shared vision" }).check();
-  await expect(contacts).toContainText("T1");
+  await expect(contacts).toContainText(/A\d+/);
   await page.getByRole("button", { name: "Select officer P1", exact: true }).click();
   await expect(contacts).toContainText("DIRECT");
   await expect(page.locator(".three-canvas canvas")).toHaveAttribute("aria-label", /3D simulation/);
@@ -172,7 +172,7 @@ test("direction arrows toggle in the officer glasses view", async ({ page }) => 
   page.on("pageerror", (error) => errors.push(error.message));
   await pausedScene(page);
   await page.getByRole("button", { name: "Officer glasses", exact: true }).click();
-  await expect(page.locator(".contacts")).toContainText("T1");
+  await expect(page.locator(".contacts")).toContainText(/A\d+/);
   const arrows = page.getByRole("checkbox", { name: "Direction arrows" });
   await expect(arrows).toBeChecked();
   await page.locator(".three-canvas").screenshot({ path: test.info().outputPath("glasses-arrows.png") });

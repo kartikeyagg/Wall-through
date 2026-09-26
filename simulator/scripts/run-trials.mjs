@@ -26,7 +26,7 @@ for (let seed = 1; seed <= seeds; seed += 1) {
     stepWorld(world, 1 / 60, { autoPatrol: true, autoRotate: true });
     const timestamp = world.time * 1000;
     const poses = localizer.update(world, timestamp);
-    const frame = pipeline.update(world, timestamp);
+    const frame = pipeline.update(world, timestamp, poses);
     metrics.observe(world, poses, frame);
   }
   reports.push(metrics.summary());

@@ -120,6 +120,8 @@ and radar tracking.
 Targets also carry a `hostile` flag in this lab world. It is ground truth only:
 it is excluded from sensors, tracks, and officer-facing observations, because
 the exercise is that sensors flag bodies while an officer judges intent.
+The live camera assigns anonymous `A…` track IDs from measured positions.
+The world's `T…` IDs remain private to simulator scoring and overview rendering.
 
 ## Sensor ownership and shared vision
 

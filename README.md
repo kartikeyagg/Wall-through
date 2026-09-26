@@ -22,6 +22,8 @@ Select an officer in the 3D world overview, then choose **Officer glasses** for 
 
 Detected targets are marked with a velocity arrow, a fading movement trail, and an uncertainty ring that swells with range — depth error grows with the square of distance, so a distant target is genuinely less precisely located. Drag **Stereo baseline** to watch triangulation tighten or fail.
 
+Live tracks use anonymous `A…` IDs assigned from sensor positions; the detector does not publish the simulated person's `T…` identity. Camera measurements and published skeletons are placed into the shared world through each officer's estimated self-pose, so localization error can shift a teammate's overlay.
+
 In **Officer glasses**, arrows around the centre of the view point toward every live target, even ones behind the officer. Up means ahead and down means behind. Yellow arrows are the officer's own detections; lime arrows come from teammates. Like skeletons, the arrows are drawn over walls ([details](docs/SIMULATION.md#direction-arrows-to-every-known-target)).
 
 A resolved target also gets a skeleton. The officer who sees it draws it solid; teammates draw the published pose faintly over their feed, fading out on its own when the source camera loses the subject. Drag **Overlay opacity** to set how present those teammate figures are. The overlay is drawn on the glass and never re-enters detection — the **BYPASSED** counter shows how many layers the detector refused each frame.
@@ -58,3 +60,5 @@ This is a development demonstration; it does not implement real hardware drivers
 ## Going real
 
 [The real-world plan](docs/REAL-WORLD-PLAN.md) sets out what a hardware build needs: the officer kit, the thrown radar puck, the team network and the software that replaces each simulator module. It also lists every place the simulator is currently more optimistic than reality, and how to make it realistic while keeping it lag-free on a modest laptop.
+
+For an Intel RealSense D415, use the [D415 capture guide](hardware/realsense/README.md). It creates a native replayable recording and separate raw RGB, depth and IR camera feeds, then saves derived point clouds without discarding the originals. The D415 has no IMU, so a world-locked 3D map needs a calibrated external IMU and VIO/SLAM pose stream.

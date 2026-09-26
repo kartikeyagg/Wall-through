@@ -18,6 +18,36 @@ function scene(officers, targets, walls = []) {
   return { time: 0, officers, targets, walls };
 }
 
+test("estimated heading shifts back-projected targets in proportion to range", () => {
+  const offset = 0.1;
+  const measure = (range) => {
+    const world = scene([officer("P1", 0, 0)], [target("T1", range, 0)]);
+    const estimate = { officerId: "P1", position: { x: 0, y: 1.7, z: 0 },
+      orientation: { yaw: offset, pitch: 0, roll: 0 }, fix: { sigma: 1 }, headingSigma: offset };
+    return detect(world, { noise: false, range: 500, localizations: [estimate] })[0];
+  };
+  const near = measure(100), far = measure(200);
+  assert.ok(near && far);
+  assert.ok(Math.abs(near.position.z - 100 * Math.sin(offset)) < 1e-6);
+  assert.ok(Math.abs(far.position.z - 200 * Math.sin(offset)) < 1e-6);
+  assert.ok(far.sigma > near.sigma);
+});
+
+test("the live pipeline places detections and skeletons through the published self-pose", () => {
+  const world = scene([officer("P1", 0, 0)], [target("T1", 120, 0)]);
+  const pose = (yaw) => ({ officerId: "P1", position: { x: 0, y: 1.7, z: 0 },
+    orientation: { yaw, pitch: 0, roll: 0 }, fix: { sigma: 1 }, headingSigma: 0.02 });
+  const baseline = new StereoVisionPipeline({ noise: false }).update(world, 0, [pose(0)]);
+  const turned = new StereoVisionPipeline({ noise: false }).update(world, 0, [pose(0.1)]);
+  assert.ok(turned.detections[0].position.z - baseline.detections[0].position.z > 10);
+  const neck = (frame) => frame.skeletons[0].skeleton.joints.find((joint) => joint.name === "neck");
+  const detectionShift = turned.detections[0].position.z - baseline.detections[0].position.z;
+  const skeletonShift = neck(turned).z - neck(baseline).z;
+  assert.ok(skeletonShift > 10);
+  assert.ok(Math.abs(skeletonShift - detectionShift) < 1);
+  assert.ok(turned.detections[0].sigma > 1);
+});
+
 const officer = (id, x, y, angle = 0) => ({ id, x, y, angle, radius: 13 });
 const target = (id, x, y) => ({ id, x, y, angle: 0, radius: 12 });
 
@@ -285,8 +315,9 @@ test("camera poses retain gait phase independently and continuously per observer
   const frame = pipeline.update(world, 1000);
   const phases = new Map(frame.detections.map((detection) => [detection.officerId, detection.skeleton.phase]));
   assert.ok(phases.get("P1") > 0 && phases.get("P2") > 0);
-  assert.equal(phases.get("P1"), pipeline.poser.phaseOf("T1", "P1"));
-  assert.equal(phases.get("P2"), pipeline.poser.phaseOf("T1", "P2"));
+  const trackId = frame.detections[0].trackId;
+  assert.equal(phases.get("P1"), pipeline.poser.phaseOf(trackId, "P1"));
+  assert.equal(phases.get("P2"), pipeline.poser.phaseOf(trackId, "P2"));
 });
 
 test("published skeleton frames are synthetic overlay layers", () => {
@@ -343,10 +374,10 @@ test("gait phase survives a configure call that changes only range", () => {
   pipeline.update(world, 0);
   world.targets[0].x = 180;
   pipeline.update(world, 1000);
-  const phase = pipeline.poser.phaseOf("T1");
+  const phase = pipeline.poser.phaseOf("A1");
   assert.notEqual(phase, 0);
   pipeline.configure({ range: 400 });
-  assert.equal(pipeline.poser.phaseOf("T1"), phase);
+  assert.equal(pipeline.poser.phaseOf("A1"), phase);
 });
 
 test("track observations attach the highest-confidence supplied skeleton only", () => {

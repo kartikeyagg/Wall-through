@@ -211,6 +211,7 @@ export class SelfLocalization {
         timestamp,
         position,
         orientation: { yaw, pitch: 0, roll: 0 },
+        headingSigma: this.compassError,
         sources: { stereo: true, compass: true, imu: imuEnabled, gps: gpsActive },
         fix,
         ...(gps ? { gps: { sigma: this.gpsPositionError } } : {}),

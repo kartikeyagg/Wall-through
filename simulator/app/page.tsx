@@ -42,6 +42,7 @@ export default function Home() {
   // One registry for the whole team: a clearance made by any officer is the
   // team's shared judgement, which is the entire point of detagging.
   const threats = useRef(new ThreatRegistry());
+  const truthByTrack = useRef(new Map<string, string>());
   const [count, setCount] = useState(7);
   const [stats, setStats] = useState({ time: 0, detections: 0, contacts: [] as VisionContact[], heading: 270, sensors: 0, rig: createStereoRig({ baseline: initial.baseline, hfov: initial.fov }), disparity: 0, sigma: 0, published: 0, layers: 0, bypassed: 0, pose: 0, captureRate: 0, pucks: [] as SensorReport[], radarTracks: 0, returns: 0, cleared: 0, hostile: 0, score: { correctlyCleared: 0, wronglyCleared: 0, bystandersLeftFlagged: 0, correctlyFlagged: 0 } });
   const change = useCallback(<K extends keyof Settings>(key: K, value: Settings[K]) => setSettings((current) => ({ ...current, [key]: value })), []);
@@ -61,7 +62,10 @@ export default function Home() {
       const localizations = localizer.current.update(current, current.time * 1000, { imuEnabled: config.imu, gpsEnabled: config.gps });
       localizationsRef.current = localizations;
       const vision = { range: config.range, fov: config.fov * Math.PI / 180 };
-      const { detections, tracks, rig, skeletons, bypassed, sensors, radarTracks, radarReturns, captureRate } = pipeline.current.update(current, current.time * 1000);
+      const { detections, tracks, rig, skeletons, bypassed, sensors, radarTracks, radarReturns, captureRate } = pipeline.current.update(current, current.time * 1000, localizations);
+      for (const detection of detections) if (detection.truthId) truthByTrack.current.set(detection.trackId, detection.truthId);
+      const liveTrackIds = new Set(tracks.map((track) => track.trackId));
+      for (const trackId of truthByTrack.current.keys()) if (!liveTrackIds.has(trackId)) truthByTrack.current.delete(trackId);
       sensorsRef.current = sensors;
       // Coasting preserves a motion track, but only a live observer can vouch
       // for an officer's clearance.
@@ -85,14 +89,15 @@ export default function Home() {
         const counts = threats.current.stats(observations);
         // Lab-only scoring: the officer never sees which body is truly hostile,
         // but the simulator can mark their calls afterwards.
-        const truth = Object.fromEntries(current.targets.map((target) => [target.id, Boolean(target.hostile)]));
+        const truth = Object.fromEntries([...truthByTrack.current].map(([trackId, targetId]) =>
+          [trackId, Boolean(current.targets.find((target) => target.id === targetId)?.hostile)]));
         setStats({ time: current.time, detections: tracks.length, contacts, heading: ((angle * 180 / Math.PI) % 360 + 360) % 360, sensors: detections.length, rig, disparity: mean(detections.map((item) => item.disparity)), sigma: mean(tracks.map((item) => item.sigma)), published: skeletons.length, layers: overlaysRef.current.length, bypassed, pose: mean(skeletons.map((item) => item.confidence)), captureRate, pucks: sensors, radarTracks: radarTracks.length, returns: radarReturns, cleared: counts.cleared, hostile: counts.hostile, score: scoreClearances(observations, truth) }); lastStats = now;
       }
       frame = requestAnimationFrame(tick);
     };
     frame = requestAnimationFrame(tick); return () => cancelAnimationFrame(frame);
   }, []);
-  const reset = useCallback((members = count, environment = live.current.environment) => { world.current = createWorld(members, { environment }); pipeline.current.reset(); localizer.current.reset(); threats.current.reset(); sensorsRef.current = []; localizationsRef.current = []; setLocalization({ estimate: null, error: 0 }); keys.current.clear(); setSettings((current) => ({ ...current, selected: "P2", environment, gps: environment === "outdoor" && current.gps })); }, [count]);
+  const reset = useCallback((members = count, environment = live.current.environment) => { world.current = createWorld(members, { environment }); pipeline.current.reset(); localizer.current.reset(); threats.current.reset(); truthByTrack.current.clear(); sensorsRef.current = []; localizationsRef.current = []; setLocalization({ estimate: null, error: 0 }); keys.current.clear(); setSettings((current) => ({ ...current, selected: "P2", environment, gps: environment === "outdoor" && current.gps })); }, [count]);
   const throwPuck = useCallback(() => { const current = world.current; if (current) throwSensor(current, live.current.selected, { timestamp: current.time * 1000 }); }, []);
   const recallPuck = useCallback((sensorId: string) => { const current = world.current; if (current) recallSensor(current, sensorId); }, []);
   // Clearing and re-flagging are the same gesture: the operator is correcting
